@@ -3,15 +3,15 @@ import pandas as pd
 import requests
 import json
 from io import BytesIO
+from bs4 import BeautifulSoup
 
-st.set_page_config(page_title="CFPS & FAA Weather/NOTAM Viewer", layout="wide")
+st.set_page_config(page_title="CFPS & FAA NOTAM Viewer", layout="wide")
 st.title("CFPS & FAA Weather/NOTAM Viewer")
 
 # --------------------------
-# Functions to fetch data
+# Function to fetch CFPS data
 # --------------------------
 def get_cfps_data(icao: str):
-    """Fetch Canadian CFPS data"""
     url = "https://plan.navcanada.ca/weather/api/alpha/"
     params = {
         "site": icao,
@@ -19,6 +19,7 @@ def get_cfps_data(icao: str):
         "notam_choice": "default",
         "_": "1756244240291"
     }
+
     query_params = []
     for key, value in params.items():
         if isinstance(value, list):
@@ -26,32 +27,55 @@ def get_cfps_data(icao: str):
                 query_params.append((key, v))
         else:
             query_params.append((key, value))
+
     response = requests.get(url, params=query_params)
     response.raise_for_status()
     data = response.json()
+
     organized = {}
-    for item in data.get("data", []):
+    for item in data["data"]:
         typ = item["type"]
         if typ not in organized:
             organized[typ] = []
         organized[typ].append(item)
     return organized
 
-def fetch_faa_notams(icao: str):
-    """Fetch FAA U.S. NOTAMs (simplified, K-prefixed ICAO assumed U.S.)"""
-    url = f"https://api.faa.gov/notams/{icao}"  # Placeholder endpoint
+# --------------------------
+# Function to fetch FAA NOTAMs
+# --------------------------
+def get_faa_notams(icao: str):
     try:
-        response = requests.get(url)
+        session = requests.Session()
+        search_url = "https://notams.aim.faa.gov/notamSearch/"
+        # initial GET to grab any required cookies
+        session.get(search_url)
+
+        # POST form data to get NOTAMs for the ICAO
+        form_data = {
+            "airportIdentifier": icao,
+            "actionType": "search",
+            "radius": "0",
+            "airportType": "All"
+        }
+        response = session.post(search_url, data=form_data)
         response.raise_for_status()
-        return response.json()
+
+        soup = BeautifulSoup(response.text, "html.parser")
+        # Table rows with NOTAM data
+        rows = soup.select("table.table tbody tr")
+        notams = []
+        for row in rows:
+            cols = [c.get_text(strip=True) for c in row.find_all("td")]
+            if cols:
+                notams.append(" | ".join(cols))
+        return "\n\n".join(notams) if notams else "No NOTAMs found"
     except Exception as e:
-        st.warning(f"Failed to fetch FAA NOTAMs for {icao}: {e}")
-        return []
+        return f"Failed to fetch FAA NOTAMs for {icao}: {e}"
 
 # --------------------------
 # User input
 # --------------------------
-icao_input = st.text_input("Enter a single ICAO code (e.g., CYYC, KATL):").upper().strip()
+icao_input = st.text_input("Enter a single ICAO code (e.g., CYYC or KTEB):").upper().strip()
 uploaded_file = st.file_uploader("Or upload an Excel/CSV with ICAO codes (column named 'ICAO')", type=["xlsx", "csv"])
 
 icao_list = []
@@ -80,17 +104,16 @@ if icao_list:
     results = []
 
     for icao in icao_list:
-        airport_result = {"ICAO": icao, "METAR": "", "TAF": "", "NOTAMs": ""}
         try:
             if icao.startswith("K"):
-                # Fetch FAA U.S. NOTAMs
-                notams = fetch_faa_notams(icao)
-                airport_result["NOTAMs"] = "\n\n".join([n.get("message", "") for n in notams])
+                # U.S. airport -> FAA
+                notam_text = get_faa_notams(icao)
+                metar = taf = ""
             else:
-                # Fetch CFPS data
+                # Canadian or other airport -> CFPS
                 data = get_cfps_data(icao)
-                airport_result["METAR"] = "\n".join([m["text"] for m in data.get("metar", [])])
-                airport_result["TAF"] = "\n".join([t["text"] for t in data.get("taf", [])])
+                metar = "\n".join([m["text"] for m in data.get("metar", [])])
+                taf = "\n".join([t["text"] for t in data.get("taf", [])])
                 notams = []
                 for n in data.get("notam", []):
                     try:
@@ -98,13 +121,19 @@ if icao_list:
                         notams.append(notam_json.get("raw", ""))
                     except:
                         notams.append(n["text"])
-                airport_result["NOTAMs"] = "\n\n".join(notams)
+                notam_text = "\n\n".join(notams)
+
+            results.append({
+                "ICAO": icao,
+                "METAR": metar,
+                "TAF": taf,
+                "NOTAMs": notam_text
+            })
         except Exception as e:
             st.warning(f"Failed to fetch data for {icao}: {e}")
-        results.append(airport_result)
 
-    # Display results neatly
-    st.subheader("Airport Data")
+    # Display each ICAO nicely
+    st.subheader("Data Results")
     for r in results:
         with st.expander(f"{r['ICAO']}"):
             st.markdown("**METAR:**")
@@ -112,7 +141,7 @@ if icao_list:
             st.markdown("**TAF:**")
             st.code(r["TAF"] or "No TAF available", language="text")
             st.markdown("**NOTAMs:**")
-            st.text_area(f"NOTAMs_{r['ICAO']}", r["NOTAMs"] or "No NOTAMs available", height=300)
+            st.text_area(f"NOTAMs {r['ICAO']}", r["NOTAMs"] or "No NOTAMs available", height=300, key=f"notam_{r['ICAO']}")
 
     # Allow download as Excel
     df_results = pd.DataFrame(results)
