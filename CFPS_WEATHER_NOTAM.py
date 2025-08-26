@@ -1,73 +1,121 @@
 import streamlit as st
 import pandas as pd
-import re
+import requests
+import json
+from io import BytesIO
 
-st.set_page_config(page_title="Airport NOTAM & Weather Checker", layout="wide")
+st.set_page_config(page_title="CFPS Weather & NOTAM Viewer", layout="wide")
+st.title("CFPS Weather & NOTAM Viewer")
 
-st.title("Airport NOTAM & Weather Checker")
+# --------------------------
+# Function to fetch CFPS data
+# --------------------------
+def get_cfps_data(icao: str):
+    url = "https://plan.navcanada.ca/weather/api/alpha/"
+    params = {
+        "site": icao,
+        "alpha": ["sigmet", "airmet", "notam", "metar", "taf", "pirep", "upperwind", "space_weather"],
+        "notam_choice": "default",
+        "_": "1756244240291"
+    }
 
-# --- Manual ICAO entry ---
-manual_icao = st.text_input("Enter ICAO code(s) manually (comma-separated)")
+    query_params = []
+    for key, value in params.items():
+        if isinstance(value, list):
+            for v in value:
+                query_params.append((key, v))
+        else:
+            query_params.append((key, value))
 
-# --- Upload Excel/CSV file with ICAO codes ---
-uploaded_file = st.file_uploader("Or upload Excel/CSV file with ICAO codes", type=["xlsx", "csv"])
+    response = requests.get(url, params=query_params)
+    response.raise_for_status()
+    data = response.json()
 
-# Highlight keywords in NOTAMs
-def highlight_notams(text):
-    keywords = ["CLOSED", "RESTRICTED", "INOPERATIVE", "OBSTRUCTION", "HAZARD", "RWY"]
-    def repl(match):
-        return f'<span style="color:red; font-weight:bold;">{match.group(0)}</span>'
-    pattern = re.compile("|".join(keywords), re.IGNORECASE)
-    return pattern.sub(repl, text).replace("\n", "<br>")
+    organized = {}
+    for item in data["data"]:
+        typ = item["type"]
+        if typ not in organized:
+            organized[typ] = []
+        organized[typ].append(item)
+    return organized
 
-# Collect all ICAO codes from both sources
+# --------------------------
+# User input
+# --------------------------
+icao_input = st.text_input("Enter a single ICAO code (e.g., CYYC):").upper().strip()
+uploaded_file = st.file_uploader("Or upload an Excel/CSV with ICAO codes (column named 'ICAO')", type=["xlsx", "csv"])
+
 icao_list = []
 
-if manual_icao:
-    icao_list.extend([code.strip().upper() for code in manual_icao.split(",") if code.strip()])
+if icao_input:
+    icao_list.append(icao_input)
 
 if uploaded_file:
-    # Read file
-    if uploaded_file.name.endswith(".xlsx"):
-        df_airports = pd.read_excel(uploaded_file)
-    else:
-        df_airports = pd.read_csv(uploaded_file)
-    
-    if "ICAO" not in df_airports.columns:
-        st.error("Excel/CSV file must contain an 'ICAO' column.")
-    else:
-        icao_list.extend(df_airports["ICAO"].str.upper().tolist())
+    try:
+        if uploaded_file.name.endswith(".csv"):
+            df = pd.read_csv(uploaded_file)
+        else:
+            df = pd.read_excel(uploaded_file)
+        if "ICAO" in df.columns:
+            icao_list.extend(df["ICAO"].dropna().str.upper().tolist())
+        else:
+            st.error("Uploaded file must have a column named 'ICAO'")
+    except Exception as e:
+        st.error(f"Error reading file: {e}")
 
 # Remove duplicates
 icao_list = list(dict.fromkeys(icao_list))
 
+# --------------------------
+# Fetch and display data
+# --------------------------
 if icao_list:
-    # Simulate fetching data for each airport
+    st.write(f"Fetching CFPS data for {len(icao_list)} airport(s)...")
     results = []
-    for icao in icao_list:
-        results.append({
-            "ICAO": icao,
-            "Airport Name": f"Sample Airport {icao}",
-            "NOTAMs": f"RWY 27 CLOSED due to maintenance.\nTaxiway B RESTRICTED.\nObstruction near runway.",
-            "Weather": f"METAR/TAF for {icao}: Wind 270@15kt, visibility 10km, clear skies."
-        })
-    df_results = pd.DataFrame(results)
 
-    # --- Display nicely ---
-    for i, row in df_results.iterrows():
-        with st.expander(f"{row['ICAO']} - {row['Airport Name']}", expanded=True):
+    for idx, icao in enumerate(icao_list):
+        try:
+            data = get_cfps_data(icao)
+            metar = "\n".join([m["text"] for m in data.get("metar", [])])
+            taf = "\n".join([t["text"] for t in data.get("taf", [])])
+            notams = []
+            for n in data.get("notam", []):
+                try:
+                    notam_json = json.loads(n["text"])
+                    notams.append(notam_json.get("raw", ""))
+                except:
+                    notams.append(n["text"])
+            notam_text = "\n\n".join(notams)
+
+            results.append({
+                "ICAO": icao,
+                "METAR": metar,
+                "TAF": taf,
+                "NOTAMs": notam_text
+            })
+        except Exception as e:
+            st.warning(f"Failed to fetch data for {icao}: {e}")
+
+    # Display each ICAO nicely
+    st.subheader("CFPS Data")
+    for idx, r in enumerate(results):
+        with st.expander(f"{r['ICAO']}"):
+            st.markdown("**METAR:**")
+            st.code(r["METAR"] or "No METAR available", language="text")
+            st.markdown("**TAF:**")
+            st.code(r["TAF"] or "No TAF available", language="text")
             st.markdown("**NOTAMs:**")
-            st.markdown(
-                f'<div style="max-height:250px; overflow-y:auto; border:1px solid #ccc; padding:5px; background-color:#f9f9f9;">'
-                f'{highlight_notams(row["NOTAMs"])}'
-                f'</div>',
-                unsafe_allow_html=True
-            )
+            # Add unique key using index
+            st.text_area("NOTAMs", r["NOTAMs"] or "No NOTAMs available", height=300, key=f"notam_{idx}")
 
-            st.markdown("**Weather:**")
-            st.markdown(
-                f'<div style="max-height:150px; overflow-y:auto; border:1px solid #ccc; padding:5px; background-color:#eef;">'
-                f'{row["Weather"].replace(chr(10), "<br>")}'
-                f'</div>',
-                unsafe_allow_html=True
-            )
+    # Allow download as Excel
+    df_results = pd.DataFrame(results)
+    towrite = BytesIO()
+    df_results.to_excel(towrite, index=False, engine="openpyxl")
+    towrite.seek(0)
+    st.download_button(
+        label="Download All Results as Excel",
+        data=towrite,
+        file_name="cfps_data.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
