@@ -8,6 +8,11 @@ st.set_page_config(page_title="CFPS Weather & NOTAM Viewer", layout="wide")
 st.title("CFPS Weather & NOTAM Viewer")
 
 # --------------------------
+# Keywords to highlight/flag
+# --------------------------
+KEYWORDS = ["CLOSED", "CLSD"]
+
+# --------------------------
 # Function to fetch CFPS data
 # --------------------------
 def get_cfps_data(icao: str):
@@ -16,6 +21,7 @@ def get_cfps_data(icao: str):
         "site": icao,
         "alpha": ["sigmet", "airmet", "notam", "metar", "taf", "pirep", "upperwind", "space_weather"],
         "notam_choice": "default",
+        "_": "1756244240291"
     }
 
     query_params = []
@@ -39,11 +45,12 @@ def get_cfps_data(icao: str):
     return organized
 
 # --------------------------
-# Keyword highlighter
+# Function to highlight keywords in text
 # --------------------------
-def highlight_text(text: str, keyword: str = "CLOSED") -> str:
-    """Highlight keyword in red inside NOTAM text."""
-    return text.replace(keyword, f"<span style='color:red; font-weight:bold;'>{keyword}</span>")
+def highlight_text(text: str, keywords=KEYWORDS) -> str:
+    for kw in keywords:
+        text = text.replace(kw, f"<span style='color:red; font-weight:bold;'>{kw}</span>")
+    return text
 
 # --------------------------
 # User input
@@ -91,9 +98,11 @@ if icao_list:
                 except:
                     raw_text = n["text"]
 
-                if "CLOSED" in raw_text:
+                # Check for keywords
+                if any(kw in raw_text for kw in KEYWORDS):
                     notam_flagged = True
-                notams.append(raw_text)
+                highlighted_text = highlight_text(raw_text)
+                notams.append(highlighted_text)
 
             notam_text = "\n\n".join(notams)
 
@@ -102,28 +111,29 @@ if icao_list:
                 "METAR": metar,
                 "TAF": taf,
                 "NOTAMs": notam_text,
-                "Flagged": notam_flagged
+                "flagged": notam_flagged
             })
         except Exception as e:
             st.warning(f"Failed to fetch data for {icao}: {e}")
 
-    # Display each ICAO nicely with expander
+    # Display each ICAO nicely with collapsible header
     st.subheader("CFPS Data")
     for r in results:
-        header_label = r['ICAO']
-        if r["Flagged"]:
-            header_label = f"🚨 {header_label} (CLOSED NOTAM!)"
+        if r["flagged"]:
+            header_style = f"<span style='color:red; font-weight:bold'>{r['ICAO']}</span>"
+        else:
+            header_style = r["ICAO"]
 
-        with st.expander(header_label, expanded=r["Flagged"]):
+        with st.expander(header_style, expanded=True):
             st.markdown("**METAR:**")
             st.code(r["METAR"] or "No METAR available", language="text")
             st.markdown("**TAF:**")
             st.code(r["TAF"] or "No TAF available", language="text")
-
-            # Highlight NOTAMs
-            highlighted_notams = highlight_text(r["NOTAMs"], "CLOSED")
-            st.markdown("**NOTAMs:**", unsafe_allow_html=True)
-            st.markdown(f"<div style='white-space:pre-wrap;'>{highlighted_notams or 'No NOTAMs available'}</div>", unsafe_allow_html=True)
+            st.markdown("**NOTAMs:**")
+            # Split NOTAMs by double newlines and put each in its own sub-expander
+            for i, nt in enumerate(r["NOTAMs"].split("\n\n")):
+                with st.expander(f"NOTAM {i+1}"):
+                    st.markdown(nt, unsafe_allow_html=True)
 
     # Allow download as Excel
     df_results = pd.DataFrame(results)
