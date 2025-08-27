@@ -43,24 +43,17 @@ def get_cfps_data(icao: str):
 # Function to fetch FAA NOTAMs (US)
 # --------------------------
 def get_us_notams(icao: str):
-    url = "https://notams.aim.faa.gov/notamSearch/search"
-    payload = {
-        "searchType": "0",  # basic search
-        "designatorsForLocation": icao.upper(),
-        "radius": "10"
-    }
-    headers = {
-        "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0"
-    }
-    response = requests.post(url, headers=headers, json=payload)
+    url = f"https://aviationweather.gov/api/data/notams?ids={icao.upper()}"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    response = requests.get(url, headers=headers)
     response.raise_for_status()
     data = response.json()
 
     notams = []
-    for n in data.get("notamList", []):
-        notams.append(n.get("rawNotam", ""))
+    for n in data.get("data", []):
+        notams.append(n.get("raw", ""))
     return notams
+
 
 # --------------------------
 # User input
@@ -149,3 +142,4 @@ if icao_list:
         file_name="airport_data.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
