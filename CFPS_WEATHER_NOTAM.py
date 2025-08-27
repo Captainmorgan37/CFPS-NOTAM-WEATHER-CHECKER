@@ -4,8 +4,8 @@ import requests
 import json
 from io import BytesIO
 
-st.set_page_config(page_title="CFPS & FAA Weather/NOTAM Viewer", layout="wide")
-st.title("CFPS & FAA Weather & NOTAM Viewer")
+st.set_page_config(page_title="CFPS & FAA NOTAM Viewer", layout="wide")
+st.title("CFPS & FAA NOTAM Viewer")
 
 # --------------------------
 # Function to fetch CFPS data (Canada)
@@ -40,19 +40,26 @@ def get_cfps_data(icao: str):
     return organized
 
 # --------------------------
-# Function to fetch US NOTAMs (FAA via AviationWeather.gov)
+# Function to fetch FAA NOTAMs (US)
 # --------------------------
 def get_us_notams(icao: str):
-    url = f"https://aviationweather.gov/cgi-bin/json/NotamJSON.php?designators={icao}"
-    response = requests.get(url, timeout=15)
+    url = "https://notams.aim.faa.gov/notamSearch/search"
+    payload = {
+        "searchType": "0",  # basic search
+        "designatorsForLocation": icao.upper(),
+        "radius": "10"
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0"
+    }
+    response = requests.post(url, headers=headers, json=payload)
     response.raise_for_status()
     data = response.json()
 
     notams = []
-    for n in data.get("notam", []):
-        raw_text = n.get("all", "")
-        if raw_text:
-            notams.append(raw_text)
+    for n in data.get("notamList", []):
+        notams.append(n.get("rawNotam", ""))
     return notams
 
 # --------------------------
@@ -88,7 +95,16 @@ if icao_list:
 
     for icao in icao_list:
         try:
-            if icao.startswith("C"):  # Canadian airports
+            if icao.startswith("K"):  # crude check for US airports
+                notams = get_us_notams(icao)
+                notam_text = "\n\n".join(notams)
+                results.append({
+                    "ICAO": icao,
+                    "METAR": "Use aviationweather.gov for US METARs",
+                    "TAF": "Use aviationweather.gov for US TAFs",
+                    "NOTAMs": notam_text or "No NOTAMs available"
+                })
+            else:  # Canada or others via CFPS
                 data = get_cfps_data(icao)
                 metar = "\n".join([m["text"] for m in data.get("metar", [])])
                 taf = "\n".join([t["text"] for t in data.get("taf", [])])
@@ -101,20 +117,12 @@ if icao_list:
                         notams.append(n["text"])
                 notam_text = "\n\n".join(notams)
 
-            elif icao.startswith("K"):  # U.S. airports
-                metar, taf = "", ""  # Could expand later with aviationweather.gov METAR/TAF API
-                notams = get_us_notams(icao)
-                notam_text = "\n\n".join(notams)
-
-            else:  # Unsupported ICAO
-                metar, taf, notam_text = "", "", "Unsupported ICAO prefix"
-
-            results.append({
-                "ICAO": icao,
-                "METAR": metar,
-                "TAF": taf,
-                "NOTAMs": notam_text
-            })
+                results.append({
+                    "ICAO": icao,
+                    "METAR": metar,
+                    "TAF": taf,
+                    "NOTAMs": notam_text or "No NOTAMs available"
+                })
 
         except Exception as e:
             st.warning(f"Failed to fetch data for {icao}: {e}")
