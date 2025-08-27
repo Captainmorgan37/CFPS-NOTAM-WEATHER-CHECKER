@@ -10,7 +10,7 @@ st.title("CFPS Weather & NOTAM Viewer")
 # --------------------------
 # Words to flag in NOTAMs
 # --------------------------
-FLAG_WORDS = ["CLOSED"]  # Add more words here as needed
+FLAG_WORDS = ["CLOSED","CLSD"]  # Add more words here as needed
 
 # --------------------------
 # Function to fetch CFPS data
@@ -127,3 +127,4 @@ if icao_list:
         file_name="cfps_data.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
