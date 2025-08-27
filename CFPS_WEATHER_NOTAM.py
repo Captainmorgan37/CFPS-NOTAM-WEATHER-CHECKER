@@ -96,4 +96,46 @@ if icao_list:
 
                 if "CLOSED" in raw_text:
                     notam_flagged = True
-                notams.
+                notams.append(raw_text)
+
+            notam_text = "\n\n".join(notams)
+
+            results.append({
+                "ICAO": icao,
+                "METAR": metar,
+                "TAF": taf,
+                "NOTAMs": notam_text,
+                "Flagged": notam_flagged
+            })
+        except Exception as e:
+            st.warning(f"Failed to fetch data for {icao}: {e}")
+
+    # Display each ICAO nicely
+    st.subheader("CFPS Data")
+
+    for r in results:
+        # Red header if flagged
+        header_style = "color:red; font-weight:bold;" if r["Flagged"] else ""
+        st.markdown(f"<h3 style='{header_style}'>{r['ICAO']}</h3>", unsafe_allow_html=True)
+
+        st.markdown("**METAR:**")
+        st.code(r["METAR"] or "No METAR available", language="text")
+        st.markdown("**TAF:**")
+        st.code(r["TAF"] or "No TAF available", language="text")
+
+        # Highlight NOTAMs
+        highlighted_notams = highlight_text(r["NOTAMs"], "CLOSED")
+        st.markdown("**NOTAMs:**", unsafe_allow_html=True)
+        st.markdown(f"<div style='white-space:pre-wrap;'>{highlighted_notams or 'No NOTAMs available'}</div>", unsafe_allow_html=True)
+
+    # Allow download as Excel
+    df_results = pd.DataFrame(results)
+    towrite = BytesIO()
+    df_results.to_excel(towrite, index=False, engine="openpyxl")
+    towrite.seek(0)
+    st.download_button(
+        label="Download All Results as Excel",
+        data=towrite,
+        file_name="cfps_data.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
