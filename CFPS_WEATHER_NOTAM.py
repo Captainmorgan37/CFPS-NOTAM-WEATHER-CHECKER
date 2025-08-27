@@ -98,23 +98,26 @@ if icao_list:
         except Exception as e:
             st.warning(f"Failed to fetch data for {icao}: {e}")
 
-    # Display each ICAO nicely with flagged words
-    st.subheader("CFPS Data")
-    for r in results:
-        flagged = any(word.lower() in r["NOTAMs"].lower() for word in FLAG_WORDS)
-        header_text = f"⚠️ {r['ICAO']}" if flagged else r["ICAO"]
+# Display each ICAO nicely with flagged words
+st.subheader("CFPS Data")
+for r in results:
+    flagged = any(word.lower() in r["NOTAMs"].lower() for word in FLAG_WORDS)
+    expander_label = r['ICAO'] if not flagged else f"<span style='color:red; font-weight:bold'>⚠️ {r['ICAO']}</span>"
+    
+    with st.expander("", expanded=True):
+        # Header inside expander
+        st.markdown(expander_label, unsafe_allow_html=True)
         
-        with st.expander(header_text, expanded=True):
-            st.markdown("**METAR:**")
-            st.code(r["METAR"] or "No METAR available", language="text")
-            st.markdown("**TAF:**")
-            st.code(r["TAF"] or "No TAF available", language="text")
-            st.markdown("**NOTAMs:**")
-            
-            notam_text = r["NOTAMs"] or "No NOTAMs available"
-            for word in FLAG_WORDS:
-                notam_text = notam_text.replace(word, f"**:red[{word}]**")
-            st.markdown(notam_text)
+        st.markdown("**METAR:**")
+        st.code(r["METAR"] or "No METAR available", language="text")
+        st.markdown("**TAF:**")
+        st.code(r["TAF"] or "No TAF available", language="text")
+        st.markdown("**NOTAMs:**")
+        
+        notam_text = r["NOTAMs"] or "No NOTAMs available"
+        for word in FLAG_WORDS:
+            notam_text = notam_text.replace(word, f"**:red[{word}]**")
+        st.markdown(notam_text)
 
     # Allow download as Excel
     df_results = pd.DataFrame(results)
@@ -127,5 +130,6 @@ if icao_list:
         file_name="cfps_data.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
 
 
