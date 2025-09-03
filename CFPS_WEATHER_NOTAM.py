@@ -17,32 +17,34 @@ st.title("CFPS & FAA NOTAM Viewer")
 st.markdown("""
 <style>
 .notam-card {
-    border: 1px solid #ddd;
-    border-radius: 10px;
-    padding: 15px;
-    margin-bottom: 15px;
-    background-color: #f9f9f9;
+    border: 1px solid #ccc;
+    border-radius: 8px;
+    padding: 12px 15px;
+    margin-bottom: 12px;
+    background-color: #f8f9fa;  /* light gray */
+    color: #000000;             /* force black text */
 }
 .notam-text {
     font-size: 15px;
     line-height: 1.5;
     font-family: monospace;
     white-space: pre-wrap;
+    color: #000000;  /* ensure NOTAM body is black */
 }
 .notam-id {
     display: block;
-    margin-top: 5px;
+    margin-top: 6px;
     font-size: 13px;
-    color: #666;
+    color: #444;
     font-weight: bold;
 }
 .notam-timestamps {
-    margin-top: 10px;
+    margin-top: 8px;
     font-size: 13px;
-    color: #333;
+    color: #000;
 }
 .notam-timestamps td {
-    padding-right: 10px;
+    padding-right: 12px;
 }
 .active {
     color: green;
@@ -54,6 +56,45 @@ st.markdown("""
 }
 </style>
 """, unsafe_allow_html=True)
+
+# ----- CARD FORMATTER -----
+def format_notam_card(notam):
+    text = notam.get("text", "")
+    for kw in KEYWORDS:
+        text = text.replace(kw, f"<span style='color:red;font-weight:bold'>{kw}</span>")
+
+    notam_id = notam.get("id", "")
+    start = notam.get("effectiveStart")
+    end = notam.get("effectiveEnd")
+
+    status_html = ""
+    if start and end:
+        try:
+            start_dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
+            end_dt = datetime.fromisoformat(end.replace("Z", "+00:00"))
+            now = datetime.now(timezone.utc)
+
+            status = "Active" if start_dt <= now <= end_dt else "Expired"
+            status_class = "active" if status == "Active" else "expired"
+
+            status_html = f"""
+            <table class="notam-timestamps">
+              <tr><td>Effective</td><td>{start_dt.strftime('%b %d %Y, %I:%M %p UTC')}</td></tr>
+              <tr><td>Expires</td><td>{end_dt.strftime('%b %d %Y, %I:%M %p UTC')}</td><td class="{status_class}">({status})</td></tr>
+            </table>
+            """
+        except:
+            pass
+
+    # no trailing </div> problems — return complete card
+    return f"""
+    <div class="notam-card">
+      <div class="notam-text">{text}</div>
+      <span class="notam-id">{notam_id}</span>
+      {status_html}
+    </div>
+    """
+
 
 # ----- FUNCTIONS -----
 def get_cfps_notams(icao: str):
@@ -196,3 +237,4 @@ if icao_list:
             with st.expander(icao, expanded=False):
                 for n in notams:
                     st.markdown(format_notam_card(n), unsafe_allow_html=True)
+
