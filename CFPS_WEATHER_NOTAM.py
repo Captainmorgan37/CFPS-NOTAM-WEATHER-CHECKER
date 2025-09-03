@@ -5,8 +5,8 @@ import json
 from io import BytesIO
 
 # ----- CONFIG -----
-FAA_CLIENT_ID = st.secrets.get("FAA_CLIENT_ID")
-FAA_CLIENT_SECRET = st.secrets.get("FAA_CLIENT_SECRET")
+FAA_CLIENT_ID = st.secrets.get("cd92bc1249d64f32a10f93c72412125e")
+FAA_CLIENT_SECRET = st.secrets.get("6271aa0250394c98A84a0Be41c1943E0")
 KEYWORDS = ["CLOSED", "CLSD"]  # Add any more keywords here
 
 st.set_page_config(page_title="CFPS/FAA NOTAM Viewer", layout="wide")
@@ -125,3 +125,4 @@ if icao_list:
         file_name="notams.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
