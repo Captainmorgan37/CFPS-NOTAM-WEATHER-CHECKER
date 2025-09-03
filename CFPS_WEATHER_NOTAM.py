@@ -124,20 +124,28 @@ def get_faa_notams(icao: str):
         if any(p.lower() in text_to_use.lower() for p in IGNORE_PHRASES):
             continue
 
-        # Effective and expiry
-        effective = notam_data.get("effectiveStart", None)
-        expiry = notam_data.get("effectiveEnd", None)
-        start_dt = end_dt = None
-        if effective:
-            start_dt = datetime.fromisoformat(effective.replace("Z","")).replace(tzinfo=None)
-            effective = start_dt.strftime("%b %d %Y, %H:%M")
-        else:
-            effective = 'N/A'
-        if expiry:
-            end_dt = datetime.fromisoformat(expiry.replace("Z","")).replace(tzinfo=None)
-            expiry = end_dt.strftime("%b %d %Y, %H:%M")
-        else:
-            expiry = 'N/A'
+# Effective and expiry
+effective = notam_data.get("effectiveStart", None)
+expiry = notam_data.get("effectiveEnd", None)
+start_dt = end_dt = None
+if effective == "PERM":
+    effective = "PERM"
+    start_dt = None
+elif effective:
+    start_dt = datetime.fromisoformat(effective.replace("Z","")).replace(tzinfo=None)
+    effective = start_dt.strftime("%b %d %Y, %H:%M")
+else:
+    effective = "N/A"
+
+if expiry == "PERM":
+    expiry = "PERM"
+    end_dt = None
+elif expiry:
+    end_dt = datetime.fromisoformat(expiry.replace("Z","")).replace(tzinfo=None)
+    expiry = end_dt.strftime("%b %d %Y, %H:%M")
+else:
+    expiry = "N/A"
+
 
         sort_key = start_dt if start_dt else datetime.min
 
@@ -271,3 +279,4 @@ if icao_list:
         file_name="notams.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
