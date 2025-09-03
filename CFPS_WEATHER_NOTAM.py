@@ -49,31 +49,44 @@ def get_faa_notams(icao: str):
         "client_secret": FAA_CLIENT_SECRET
     }
     params = {
-        "icaoLocation": icao.upper(),  # <-- Correct parameter
-        "responseFormat": "geoJson",   # Default but good to be explicit
-        "pageSize": 100                # Return more at once
+        "icaoLocation": icao.upper(),
+        "responseFormat": "geoJson",
+        "pageSize": 50
     }
 
     response = requests.get(url, headers=headers, params=params)
     response.raise_for_status()
     data = response.json()
 
-    # Debug: see structure
-    st.write(f"FAA raw response for {icao}:", data)
-
-    # Extract NOTAM text depending on response structure
-    features = data.get("features", [])
+    items = data.get("items", [])
     notams = []
-    for f in features:
-        props = f.get("properties", {})
-        if "notam" in props:  # might be "notam", "text", or similar
-            notams.append(props["notam"])
-        elif "all" in props:
-            notams.append(props["all"])
-        elif "raw" in props:
-            notams.append(props["raw"])
+
+    for feature in items:
+        props = feature.get("properties", {})
+        core = props.get("coreNOTAMData", {})
+        notam_data = core.get("notam", {})
+
+        # Extract the main NOTAM text
+        notam_text = notam_data.get("text", "")
+
+        # Try to get the "simpleText" translation (nicer formatting)
+        translations = core.get("notamTranslation", [])
+        simple_text = None
+        for t in translations:
+            if t.get("type") == "LOCAL_FORMAT":
+                simple_text = t.get("simpleText")
+
+        # Build a clean string
+        clean_entry = f"📌 {notam_data.get('number', '')} | {notam_data.get('classification', '')}\n"
+        if simple_text:
+            clean_entry += simple_text
+        else:
+            clean_entry += notam_text
+
+        notams.append(clean_entry.strip())
 
     return notams
+
 
 
 def highlight_keywords(notam_text: str):
@@ -147,6 +160,7 @@ if icao_list:
         file_name="notams.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
 
 
 
