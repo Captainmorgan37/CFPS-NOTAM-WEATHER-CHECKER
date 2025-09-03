@@ -4,16 +4,17 @@ import requests
 import json
 from io import BytesIO
 
-st.set_page_config(page_title="CFPS Weather & NOTAM Viewer", layout="wide")
-st.title("CFPS Weather & NOTAM Viewer")
+st.set_page_config(page_title="CFPS + FAA NOTAM Viewer", layout="wide")
+st.title("CFPS + FAA NOTAM Viewer")
+
+# =============================
+# CONFIG - FAA API credentials
+# =============================
+FAA_CLIENT_ID = st.secrets.get("FAA_CLIENT_ID", "cd92bc1249d64f32a10f93c72412125e")
+FAA_CLIENT_SECRET = st.secrets.get("FAA_CLIENT_SECRET", "6271aa0250394c98A84a0Be41c1943E0")
 
 # --------------------------
-# Words to flag in NOTAMs
-# --------------------------
-FLAG_WORDS = ["CLOSED","CLSD"]  # Add more words here as needed
-
-# --------------------------
-# Function to fetch CFPS data
+# CFPS Data Fetcher
 # --------------------------
 def get_cfps_data(icao: str):
     url = "https://plan.navcanada.ca/weather/api/alpha/"
@@ -21,7 +22,6 @@ def get_cfps_data(icao: str):
         "site": icao,
         "alpha": ["sigmet", "airmet", "notam", "metar", "taf", "pirep", "upperwind", "space_weather"],
         "notam_choice": "default",
-        "_": "1756244240291"
     }
 
     query_params = []
@@ -39,19 +39,31 @@ def get_cfps_data(icao: str):
     organized = {}
     for item in data["data"]:
         typ = item["type"]
-        if typ not in organized:
-            organized[typ] = []
-        organized[typ].append(item)
+        organized.setdefault(typ, []).append(item)
     return organized
+
+# --------------------------
+# FAA NOTAM Fetcher
+# --------------------------
+def get_faa_notams(icao: str):
+    url = "https://external-api.faa.gov/notamapi/v1/notams"
+    headers = {
+        "client_id": FAA_CLIENT_ID,
+        "client_secret": FAA_CLIENT_SECRET
+    }
+    params = {"designators": icao}
+    
+    response = requests.get(url, headers=headers, params=params)
+    response.raise_for_status()
+    return response.json()
 
 # --------------------------
 # User input
 # --------------------------
-icao_input = st.text_input("Enter a single ICAO code (e.g., CYYC):").upper().strip()
+icao_input = st.text_input("Enter a single ICAO code (e.g., CYYC or KTEB):").upper().strip()
 uploaded_file = st.file_uploader("Or upload an Excel/CSV with ICAO codes (column named 'ICAO')", type=["xlsx", "csv"])
 
 icao_list = []
-
 if icao_input:
     icao_list.append(icao_input)
 
@@ -72,49 +84,42 @@ if uploaded_file:
 # Fetch and display data
 # --------------------------
 if icao_list:
-    st.write(f"Fetching CFPS data for {len(icao_list)} airport(s)...")
+    st.write(f"Fetching data for {len(icao_list)} airport(s)...")
     results = []
 
     for icao in icao_list:
         try:
-            data = get_cfps_data(icao)
-            metar = "\n".join([m["text"] for m in data.get("metar", [])])
-            taf = "\n".join([t["text"] for t in data.get("taf", [])])
-            notams = []
-            for n in data.get("notam", []):
-                try:
-                    notam_json = json.loads(n["text"])
-                    notams.append(notam_json.get("raw", ""))
-                except:
-                    notams.append(n["text"])
-            notam_text = "\n\n".join(notams)
+            if icao.startswith("C"):  # Canadian airports → CFPS
+                data = get_cfps_data(icao)
+                notams = [n["text"] for n in data.get("notam", [])]
+                metar = "\n".join([m["text"] for m in data.get("metar", [])])
+                taf = "\n".join([t["text"] for t in data.get("taf", [])])
+            else:  # US airports → FAA
+                faa_data = get_faa_notams(icao)
+                notams = [n.get("all", "") for n in faa_data.get("notamList", [])]
+                metar, taf = "", ""  # FAA endpoint is NOTAM-only
 
             results.append({
                 "ICAO": icao,
                 "METAR": metar,
                 "TAF": taf,
-                "NOTAMs": notam_text
+                "NOTAMs": "\n\n".join(notams)
             })
         except Exception as e:
             st.warning(f"Failed to fetch data for {icao}: {e}")
 
-    # Display each ICAO nicely with flagged words
-    st.subheader("CFPS Data")
+    # Display each ICAO nicely
+    st.subheader("Airport Data")
     for r in results:
-        flagged = any(word.lower() in r["NOTAMs"].lower() for word in FLAG_WORDS)
-        header_text = f"⚠️ {r['ICAO']}" if flagged else r["ICAO"]
-        
-        with st.expander(header_text, expanded=True):
-            st.markdown("**METAR:**")
-            st.code(r["METAR"] or "No METAR available", language="text")
-            st.markdown("**TAF:**")
-            st.code(r["TAF"] or "No TAF available", language="text")
+        with st.expander(f"{r['ICAO']}"):
+            if r["METAR"]:
+                st.markdown("**METAR:**")
+                st.code(r["METAR"], language="text")
+            if r["TAF"]:
+                st.markdown("**TAF:**")
+                st.code(r["TAF"], language="text")
             st.markdown("**NOTAMs:**")
-            
-            notam_text = r["NOTAMs"] or "No NOTAMs available"
-            for word in FLAG_WORDS:
-                notam_text = notam_text.replace(word, f"**:red[{word}]**")
-            st.markdown(notam_text)
+            st.text_area("NOTAMs", r["NOTAMs"] or "No NOTAMs available", height=300, key=f"notams_{r['ICAO']}")
 
     # Allow download as Excel
     df_results = pd.DataFrame(results)
@@ -124,7 +129,6 @@ if icao_list:
     st.download_button(
         label="Download All Results as Excel",
         data=towrite,
-        file_name="cfps_data.xlsx",
+        file_name="airport_data.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
-
