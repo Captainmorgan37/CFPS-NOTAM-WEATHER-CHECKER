@@ -2,40 +2,42 @@ import streamlit as st
 import pandas as pd
 import requests
 import json
+import re
 from io import BytesIO
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # ----- CONFIG -----
 FAA_CLIENT_ID = st.secrets["FAA_CLIENT_ID"]
 FAA_CLIENT_SECRET = st.secrets["FAA_CLIENT_SECRET"]
-KEYWORDS = ["CLOSED", "CLSD"]        # Keywords to highlight
-IGNORE_KEYWORDS = ["crane"]          # Keywords to hide from display
+KEYWORDS = ["CLOSED", "CLSD"]  # Add more keywords here
 
-st.set_page_config(page_title="CFPS/FAA NOTAM Viewer", layout="wide")
+st.set_page_config(page_title="CFPS & FAA NOTAM Viewer", layout="wide")
 st.title("CFPS & FAA NOTAM Viewer")
 
 # ----- FUNCTIONS -----
-def parse_cfps_times(notam_text):
-    """
-    Extract effective start and end times from CFPS NOTAM text.
-    Format: B) YYMMDDHHMM C) YYMMDDHHMM or PERM
-    """
-    effective, expires = "N/A", "N/A"
-    try:
-        lines = notam_text.splitlines()
-        for line in lines:
-            if line.startswith("B)"):
-                dt_str = line[2:].strip()
-                effective = datetime.strptime(dt_str, "%y%m%d%H%M").strftime("%b %d %Y, %H:%M")
-            if line.startswith("C)"):
-                dt_str = line[2:].strip()
-                if dt_str.upper() != "PERM":
-                    expires = datetime.strptime(dt_str, "%y%m%d%H%M").strftime("%b %d %Y, %H:%M")
-                else:
-                    expires = "PERM"
-    except:
-        pass
-    return effective, expires
+def parse_cfps_times(notam_text: str):
+    # Look for B) start and C) end
+    start_match = re.search(r"B\)\s*(\d+|PERM)", notam_text)
+    end_match = re.search(r"C\)\s*(\d+|PERM)", notam_text)
+    if start_match:
+        start_raw = start_match.group(1)
+        if start_raw == "PERM":
+            start = "PERM"
+        else:
+            start = datetime.strptime(start_raw, "%y%m%d%H%M").strftime("%b %d %Y, %H:%M UTC")
+    else:
+        start = "N/A"
+
+    if end_match:
+        end_raw = end_match.group(1)
+        if end_raw == "PERM":
+            end = "PERM"
+        else:
+            end = datetime.strptime(end_raw, "%y%m%d%H%M").strftime("%b %d %Y, %H:%M UTC")
+    else:
+        end = "PERM" if start == "PERM" else "N/A"
+
+    return start, end
 
 def get_cfps_notams(icao: str):
     url = "https://plan.navcanada.ca/weather/api/alpha/"
@@ -57,17 +59,16 @@ def get_cfps_notams(icao: str):
     response.raise_for_status()
     data = response.json()
     notams = []
+
     for n in data.get("data", []):
         if n.get("type") == "notam":
             try:
                 notam_json = json.loads(n["text"])
-                text = notam_json.get("raw", "")
+                raw_text = notam_json.get("raw", "")
             except:
-                text = n["text"]
-            # Apply ignore filter
-            if not any(kw.lower() in text.lower() for kw in IGNORE_KEYWORDS):
-                effective, expires = parse_cfps_times(text)
-                notams.append({"text": text, "effective": effective, "expires": expires})
+                raw_text = n["text"]
+            start, end = parse_cfps_times(raw_text)
+            notams.append({"text": raw_text, "start": start, "end": end})
     return notams
 
 def get_faa_notams(icao: str):
@@ -93,31 +94,27 @@ def get_faa_notams(icao: str):
         props = feature.get("properties", {})
         core = props.get("coreNOTAMData", {})
         notam_data = core.get("notam", {})
+
+        # Extract main text
         notam_text = notam_data.get("text", "")
+
+        # Prefer simpleText translation
         translations = core.get("notamTranslation", [])
         simple_text = None
         for t in translations:
             if t.get("type") == "LOCAL_FORMAT":
                 simple_text = t.get("simpleText")
-        clean_text = simple_text if simple_text else notam_text
 
-        # Apply ignore filter
-        if any(kw.lower() in clean_text.lower() for kw in IGNORE_KEYWORDS):
-            continue
+        clean_entry = f"{notam_data.get('number', '')} | {notam_data.get('classification', '')}\n"
+        clean_entry += simple_text or notam_text
 
-        # Extract timestamps
-        eff = notam_data.get("effectiveStart")
-        exp = notam_data.get("effectiveEnd")
-        effective = datetime.fromisoformat(eff.replace("Z", "+00:00")).strftime("%b %d %Y, %H:%M") if eff else "N/A"
-        expires = datetime.fromisoformat(exp.replace("Z", "+00:00")).strftime("%b %d %Y, %H:%M") if exp else "N/A"
+        # Extract effective and expiry times
+        start_raw = notam_data.get("effectiveStart")
+        end_raw = notam_data.get("effectiveEnd")
+        start = datetime.fromisoformat(start_raw.replace("Z", "+00:00")).strftime("%b %d %Y, %H:%M UTC") if start_raw else "PERM"
+        end = datetime.fromisoformat(end_raw.replace("Z", "+00:00")).strftime("%b %d %Y, %H:%M UTC") if end_raw else "PERM"
 
-        # Build clean entry
-        entry = {
-            "text": f"📌 {notam_data.get('number', '')} | {notam_data.get('classification', '')}\n{clean_text}",
-            "effective": effective,
-            "expires": expires
-        }
-        notams.append(entry)
+        notams.append({"text": clean_entry.strip(), "start": start, "end": end})
     return notams
 
 def highlight_keywords(notam_text: str):
@@ -126,17 +123,23 @@ def highlight_keywords(notam_text: str):
     return notam_text
 
 def format_notam_card(notam):
+    # Determine PERM label
+    perm_label = ""
+    if notam["start"] == "PERM" or notam["end"] == "PERM":
+        perm_label = "<span style='background-color:yellow;font-weight:bold;padding:2px 4px;margin-right:5px'>PERM</span>"
+
     return f"""
-    <div class="notam-card" style="border:1px solid #999; padding:10px; margin-bottom:10px; border-radius:6px; background-color:#f7f7f7; font-family:Arial, sans-serif;">
-        <p style="margin:0; white-space:pre-wrap;">{highlight_keywords(notam['text'])}</p>
-        <p style="margin:2px 0; font-size:12px; color:#555;">
-            Effective: {notam['effective']} | Expires: {notam['expires']}
-        </p>
+    <div style='border:1px solid #ccc; padding:10px; margin-bottom:10px; border-radius:5px; background-color:#f9f9f9; font-family:Arial, sans-serif; font-size:14px'>
+        {perm_label}<span style='font-weight:bold'>{highlight_keywords(notam["text"])}</span>
+        <table style='margin-top:5px; font-size:12px'>
+            <tr><td><b>Effective:</b></td><td>{notam["start"]}</td></tr>
+            <tr><td><b>Expires:</b></td><td>{notam["end"]}</td></tr>
+        </table>
     </div>
     """
 
 # ----- USER INPUT -----
-icao_input = st.text_input("Enter ICAO code(s) separated by commas (e.g., CYYC,KTEB):").upper().strip()
+icao_input = st.text_input("Enter ICAO codes (comma-separated, e.g., CYYC,KTEB):").upper().strip()
 uploaded_file = st.file_uploader("Or upload an Excel/CSV with ICAO codes (column named 'ICAO')", type=["xlsx", "csv"])
 
 icao_list = []
@@ -174,48 +177,34 @@ if icao_list:
         except Exception as e:
             st.warning(f"Failed to fetch data for {icao}: {e}")
 
-    # Display in two columns
     col1, col2 = st.columns(2)
 
     with col1:
         st.subheader("Canadian Airports (CFPS)")
         for r in cfps_results:
-            if r["NOTAMS"]:
-                with st.expander(r["ICAO"], expanded=False):
-                    for n in r["NOTAMS"]:
-                        st.markdown(format_notam_card(n), unsafe_allow_html=True)
-            else:
-                st.write(f"{r['ICAO']}: No NOTAMs available")
+            with st.expander(r["ICAO"], expanded=False):
+                for notam in r["NOTAMS"]:
+                    st.markdown(format_notam_card(notam), unsafe_allow_html=True)
 
     with col2:
         st.subheader("US Airports (FAA)")
         for r in faa_results:
-            if r["NOTAMS"]:
-                with st.expander(r["ICAO"], expanded=False):
-                    for n in r["NOTAMS"]:
-                        st.markdown(format_notam_card(n), unsafe_allow_html=True)
-            else:
-                st.write(f"{r['ICAO']}: No NOTAMs available")
+            with st.expander(r["ICAO"], expanded=False):
+                for notam in r["NOTAMS"]:
+                    st.markdown(format_notam_card(notam), unsafe_allow_html=True)
 
-    # Excel export
-    export_rows = []
+    # ----- DOWNLOAD -----
+    df_all = []
     for r in cfps_results + faa_results:
         for n in r["NOTAMS"]:
-            export_rows.append({
-                "ICAO": r["ICAO"],
-                "NOTAM": n["text"],
-                "Effective": n["effective"],
-                "Expires": n["expires"]
-            })
+            df_all.append({"ICAO": r["ICAO"], "NOTAM": n["text"], "Effective": n["start"], "Expires": n["end"]})
 
-    if export_rows:
-        df_export = pd.DataFrame(export_rows)
-        towrite = BytesIO()
-        df_export.to_excel(towrite, index=False, engine="openpyxl")
-        towrite.seek(0)
-        st.download_button(
-            label="Download All NOTAMs as Excel",
-            data=towrite,
-            file_name="notams.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+    towrite = BytesIO()
+    pd.DataFrame(df_all).to_excel(towrite, index=False, engine="openpyxl")
+    towrite.seek(0)
+    st.download_button(
+        label="Download All NOTAMs as Excel",
+        data=towrite,
+        file_name="notams.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
