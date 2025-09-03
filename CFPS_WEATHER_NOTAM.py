@@ -13,185 +13,153 @@ KEYWORDS = ["CLOSED", "CLSD"]  # Add any more keywords here
 st.set_page_config(page_title="CFPS/FAA NOTAM Viewer", layout="wide")
 st.title("CFPS & FAA NOTAM Viewer")
 
-# ----- STYLES -----
-st.markdown("""
-<style>
-.notam-card {
-    border: 1px solid #ccc;
-    border-radius: 8px;
-    padding: 12px 15px;
-    margin-bottom: 12px;
-    background-color: #f8f9fa;  /* light gray */
-    color: #000000;             /* force black text */
-}
-.notam-text {
-    font-size: 15px;
-    line-height: 1.5;
-    font-family: monospace;
-    white-space: pre-wrap;
-    color: #000000;  /* ensure NOTAM body is black */
-}
-.notam-id {
-    display: block;
-    margin-top: 6px;
-    font-size: 13px;
-    color: #444;
-    font-weight: bold;
-}
-.notam-timestamps {
-    margin-top: 8px;
-    font-size: 13px;
-    color: #000;
-}
-.notam-timestamps td {
-    padding-right: 12px;
-}
-.active {
-    color: green;
-    font-weight: bold;
-}
-.expired {
-    color: red;
-    font-weight: bold;
-}
-</style>
-""", unsafe_allow_html=True)
-
-# ----- CARD FORMATTER -----
-def format_notam_card(notam):
-    text = notam.get("text", "")
-    for kw in KEYWORDS:
-        text = text.replace(kw, f"<span style='color:red;font-weight:bold'>{kw}</span>")
-
-    notam_id = notam.get("id", "")
-    start = notam.get("effectiveStart")
-    end = notam.get("effectiveEnd")
-
-    status_html = ""
-    if start and end:
-        try:
-            start_dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
-            end_dt = datetime.fromisoformat(end.replace("Z", "+00:00"))
-            now = datetime.now(timezone.utc)
-
-            status = "Active" if start_dt <= now <= end_dt else "Expired"
-            status_class = "active" if status == "Active" else "expired"
-
-            status_html = f"""
-            <table class="notam-timestamps">
-              <tr><td>Effective</td><td>{start_dt.strftime('%b %d %Y, %I:%M %p UTC')}</td></tr>
-              <tr><td>Expires</td><td>{end_dt.strftime('%b %d %Y, %I:%M %p UTC')}</td>
-                  <td class="{status_class}">({status})</td></tr>
-            </table>
-            """
-        except:
-            pass
-
-    card_html = f"""
-    <div class="notam-card">
-      <div class="notam-text">{text}</div>
-      <span class="notam-id">{notam_id}</span>
-      {status_html}
-    </div>
-    """
-    return card_html.strip()
-
-
 # ----- FUNCTIONS -----
 def get_cfps_notams(icao: str):
     url = "https://plan.navcanada.ca/weather/api/alpha/"
     params = {"site": icao, "alpha": ["notam"], "notam_choice": "default", "_": "1756244240291"}
-    query_params = [(k, v) for k, val in params.items() for v in (val if isinstance(val, list) else [val])]
+
+    query_params = []
+    for key, value in params.items():
+        if isinstance(value, list):
+            for v in value:
+                query_params.append((key, v))
+        else:
+            query_params.append((key, value))
+
     response = requests.get(url, params=query_params)
     response.raise_for_status()
     data = response.json()
+
     notams = []
     for n in data.get("data", []):
         if n.get("type") == "notam":
             try:
                 notam_json = json.loads(n["text"])
                 notams.append({
+                    "id": notam_json.get("id", ""),
                     "text": notam_json.get("raw", ""),
-                    "id": n.get("id", ""),
+                    "effectiveStart": notam_json.get("startTime"),
+                    "effectiveEnd": notam_json.get("endTime")
+                })
+            except:
+                notams.append({
+                    "id": "",
+                    "text": n["text"],
                     "effectiveStart": None,
                     "effectiveEnd": None
                 })
-            except:
-                notams.append({"text": n["text"], "id": n.get("id", ""), "effectiveStart": None, "effectiveEnd": None})
     return notams
 
 def get_faa_notams(icao: str):
     url = "https://external-api.faa.gov/notamapi/v1/notams"
     headers = {"client_id": FAA_CLIENT_ID, "client_secret": FAA_CLIENT_SECRET}
     params = {"icaoLocation": icao.upper(), "responseFormat": "geoJson", "pageSize": 50}
+
     response = requests.get(url, headers=headers, params=params)
     response.raise_for_status()
     data = response.json()
 
     items = data.get("items", [])
     notams = []
+
     for feature in items:
         props = feature.get("properties", {})
         core = props.get("coreNOTAMData", {})
         notam_data = core.get("notam", {})
-        translations = core.get("notamTranslation", [])
 
-        simple_text = None
+        # Extract fields
+        notam_id = notam_data.get("number", notam_data.get("id", ""))
+        text = notam_data.get("text", "")
+        effective_start = notam_data.get("effectiveStart")
+        effective_end = notam_data.get("effectiveEnd")
+
+        # Prefer "simpleText" if available
+        translations = core.get("notamTranslation", [])
         for t in translations:
             if t.get("type") == "LOCAL_FORMAT":
-                simple_text = t.get("simpleText")
+                text = t.get("simpleText")
 
         notams.append({
-            "text": simple_text or notam_data.get("text", ""),
-            "id": notam_data.get("number", ""),
-            "effectiveStart": notam_data.get("effectiveStart"),
-            "effectiveEnd": notam_data.get("effectiveEnd")
+            "id": notam_id,
+            "text": text,
+            "effectiveStart": effective_start,
+            "effectiveEnd": effective_end
         })
+
     return notams
 
-def format_notam_card(notam):
-    text = notam.get("text", "")
+def highlight_keywords(notam_text: str):
     for kw in KEYWORDS:
-        text = text.replace(kw, f"<span style='color:red;font-weight:bold'>{kw}</span>")
+        notam_text = notam_text.replace(
+            kw, f"<span style='color:red;font-weight:bold'>{kw}</span>"
+        )
+    return notam_text
 
-    notam_id = notam.get("id", "")
-    start = notam.get("effectiveStart")
-    end = notam.get("effectiveEnd")
+def format_notam_card(notam):
+    # Convert times to datetime objects
+    start_dt = (
+        datetime.fromisoformat(notam["effectiveStart"].replace("Z", "+00:00"))
+        if notam["effectiveStart"]
+        else None
+    )
+    end_dt = (
+        datetime.fromisoformat(notam["effectiveEnd"].replace("Z", "+00:00"))
+        if notam["effectiveEnd"]
+        else None
+    )
+    now = datetime.now(timezone.utc)
 
-    status_html = ""
-    if start and end:
-        try:
-            start_dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
-            end_dt = datetime.fromisoformat(end.replace("Z", "+00:00"))
-            now = datetime.now(timezone.utc)
+    # Status
+    status = ""
+    remaining = ""
+    if start_dt and end_dt:
+        if start_dt <= now <= end_dt:
+            status = "Active"
+            remaining_seconds = int((end_dt - now).total_seconds())
+        elif now < start_dt:
+            status = "Pending"
+            remaining_seconds = int((start_dt - now).total_seconds())
+        else:
+            status = "Expired"
+            remaining_seconds = 0
+        hours = remaining_seconds // 3600
+        minutes = (remaining_seconds % 3600) // 60
+        remaining = f"({hours}h{minutes}m remaining)" if remaining_seconds > 0 else ""
 
-            status = "Active" if start_dt <= now <= end_dt else "Expired"
-            status_class = "active" if status == "Active" else "expired"
+    # Highlight keywords
+    text_html = highlight_keywords(notam["text"])
 
-            status_html = f"""
-            <table class="notam-timestamps">
-            <tr><td>Effective</td><td>{start_dt.strftime('%b %d %Y, %I:%M %p UTC')}</td></tr>
-            <tr><td>Expires</td><td>{end_dt.strftime('%b %d %Y, %I:%M %p UTC')}</td><td class="{status_class}">({status})</td></tr>
-            </table>
-            """
-        except:
-            pass
-
-    return f"""
-    <div class="notam-card">
-        <div class="notam-text">{text}</div>
-        <span class="notam-id">{notam_id}</span>
-        {status_html}
+    # Build HTML card
+    html = f"""
+    <div style="
+        border:1px solid #ccc;
+        border-radius:5px;
+        padding:10px;
+        margin-bottom:10px;
+        background-color:#f9f9f9;
+        font-family:Arial, sans-serif;
+        color:#000;
+    ">
+        <p style="margin:0; font-weight:bold;">{notam['id']} - {status} {remaining}</p>
+        <p style="margin:5px 0;">{text_html}</p>
+        <p style="margin:0; font-size:0.8em; color:#555;">
+            Effective: {start_dt.strftime('%b %d %Y, %I:%M %p %Z') if start_dt else 'N/A'} |
+            Expires: {end_dt.strftime('%b %d %Y, %I:%M %p %Z') if end_dt else 'N/A'}
+        </p>
     </div>
     """
+    return html
 
-# ----- INPUT -----
-icao_input = st.text_input("Enter ICAO codes (comma separated, e.g., CYYC, CYVR, KJFK):").upper().strip()
-uploaded_file = st.file_uploader("Or upload Excel/CSV with ICAO codes (column named 'ICAO')", type=["xlsx", "csv"])
+# ----- USER INPUT -----
+icao_input = st.text_area("Enter ICAO codes (comma or space separated, e.g., CYYC, KTEB):").upper().strip()
+uploaded_file = st.file_uploader("Or upload an Excel/CSV with ICAO codes (column named 'ICAO')", type=["xlsx", "csv"])
 
 icao_list = []
+
 if icao_input:
-    icao_list.extend([x.strip() for x in icao_input.split(",") if x.strip()])
+    for val in icao_input.replace(",", " ").split():
+        if val:
+            icao_list.append(val.strip())
 
 if uploaded_file:
     try:
@@ -206,37 +174,59 @@ if uploaded_file:
     except Exception as e:
         st.error(f"Error reading file: {e}")
 
-icao_list = list(set(icao_list))
-
 # ----- FETCH & DISPLAY -----
 if icao_list:
     st.write(f"Fetching NOTAMs for {len(icao_list)} airport(s)...")
-    canadian_results, faa_results = [], []
+    results_cfps = []
+    results_faa = []
 
     for icao in icao_list:
         try:
             if icao.startswith("C"):
                 notams = get_cfps_notams(icao)
-                canadian_results.append((icao, notams))
+                results_cfps.append({"ICAO": icao, "NOTAMs": notams})
             else:
                 notams = get_faa_notams(icao)
-                faa_results.append((icao, notams))
+                results_faa.append({"ICAO": icao, "NOTAMs": notams})
         except Exception as e:
             st.warning(f"Failed to fetch data for {icao}: {e}")
 
+    # Two columns layout
     col1, col2 = st.columns(2)
+
     with col1:
-        st.subheader("🇨🇦 Canadian NOTAMs (CFPS)")
-        for icao, notams in canadian_results:
-            with st.expander(icao, expanded=False):
-                for n in notams:
-                    st.markdown(format_notam_card(n), unsafe_allow_html=True)
+        st.subheader("Canadian Airports (CFPS)")
+        for r in results_cfps:
+            with st.expander(r["ICAO"], expanded=False):
+                for notam in r["NOTAMs"]:
+                    st.markdown(format_notam_card(notam), unsafe_allow_html=True)
 
     with col2:
-        st.subheader("🇺🇸 FAA NOTAMs")
-        for icao, notams in faa_results:
-            with st.expander(icao, expanded=False):
-                for n in notams:
-                    st.markdown(format_notam_card(n), unsafe_allow_html=True)
+        st.subheader("US Airports (FAA)")
+        for r in results_faa:
+            with st.expander(r["ICAO"], expanded=False):
+                for notam in r["NOTAMs"]:
+                    st.markdown(format_notam_card(notam), unsafe_allow_html=True)
 
+    # Allow download as Excel
+    all_results = []
+    for r in results_cfps + results_faa:
+        for n in r["NOTAMs"]:
+            all_results.append({
+                "ICAO": r["ICAO"],
+                "NOTAM ID": n["id"],
+                "Text": n["text"],
+                "Effective Start": n["effectiveStart"],
+                "Effective End": n["effectiveEnd"]
+            })
 
+    df_results = pd.DataFrame(all_results)
+    towrite = BytesIO()
+    df_results.to_excel(towrite, index=False, engine="openpyxl")
+    towrite.seek(0)
+    st.download_button(
+        label="Download All NOTAMs as Excel",
+        data=towrite,
+        file_name="notams.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
