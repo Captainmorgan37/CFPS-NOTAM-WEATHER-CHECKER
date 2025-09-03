@@ -92,11 +92,11 @@ if icao_list:
 
     for icao in icao_list:
         try:
-if icao.startswith("C"):
-    data = get_cfps_data(icao)
-    notams = [n["text"] for n in data.get("notam", [])]
-else:
-    notams = get_faa_notams(icao)
+            if icao.startswith("C"):
+                data = get_cfps_data(icao)
+                notams = [n["text"] for n in data.get("notam", [])]
+            else:
+                notams = get_faa_notams(icao)
 
 
             results.append({
@@ -132,4 +132,5 @@ else:
         file_name="airport_data.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
 
