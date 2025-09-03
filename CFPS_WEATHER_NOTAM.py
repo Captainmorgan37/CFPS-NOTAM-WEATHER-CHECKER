@@ -29,11 +29,15 @@ def parse_cfps_times(notam_text):
             return 'N/A'
         if t == 'PERM':
             return 'PERM'
-        return datetime.strptime(t, "%y%m%d%H%M").strftime("%b %d %Y, %H:%M")
+        return datetime.strptime(t, "%y%m%d%H%M")
 
-    start = format_time(start_match.group(1)) if start_match else 'N/A'
-    end = format_time(end_match.group(1)) if end_match else 'N/A'
-    return start, end
+    start_dt = format_time(start_match.group(1)) if start_match else None
+    end_dt = format_time(end_match.group(1)) if end_match else None
+
+    start_str = start_dt.strftime("%b %d %Y, %H:%M") if isinstance(start_dt, datetime) else start_dt or "N/A"
+    end_str = end_dt.strftime("%b %d %Y, %H:%M") if isinstance(end_dt, datetime) else end_dt or "N/A"
+
+    return start_str, end_str, start_dt, end_dt
 
 def get_cfps_notams(icao: str):
     url = "https://plan.navcanada.ca/weather/api/alpha/"
@@ -65,19 +69,16 @@ def get_cfps_notams(icao: str):
             except:
                 notam_text = text
 
-            effective_start, effective_end = parse_cfps_times(notam_text)
+            effective_start, effective_end, start_dt, end_dt = parse_cfps_times(notam_text)
             # For sorting, convert effective_start to datetime (PERM -> max datetime)
-            if effective_start == 'PERM':
-                sort_key = datetime.max
-            elif effective_start == 'N/A':
-                sort_key = datetime.min
-            else:
-                sort_key = datetime.strptime(effective_start, "%b %d %Y, %H:%M")
+            sort_key = datetime.max if effective_start == 'PERM' else start_dt or datetime.min
 
             notams.append({
                 "text": notam_text,
                 "effectiveStart": effective_start,
                 "effectiveEnd": effective_end,
+                "start_dt": start_dt,
+                "end_dt": end_dt,
                 "sortKey": sort_key
             })
 
@@ -111,35 +112,25 @@ def get_faa_notams(icao: str):
 
         # Extract text
         notam_text = notam_data.get("text", "")
-
         translations = core.get("notamTranslation", [])
-        simple_text = None
-        for t in translations:
-            if t.get("type") == "LOCAL_FORMAT":
-                simple_text = t.get("simpleText")
-
+        simple_text = next((t.get("simpleText") for t in translations if t.get("type")=="LOCAL_FORMAT"), None)
         text_to_use = simple_text if simple_text else notam_text
 
-        effective = notam_data.get("effectiveStart", None)
-        expiry = notam_data.get("effectiveEnd", None)
-        sort_key = datetime.min
-        if effective:
-            effective_dt = datetime.fromisoformat(effective.replace("Z",""))
-            sort_key = effective_dt
-            effective = effective_dt.strftime("%b %d %Y, %H:%M")
-        else:
-            effective = 'N/A'
-
-        if expiry:
-            expiry_dt = datetime.fromisoformat(expiry.replace("Z",""))
-            expiry = expiry_dt.strftime("%b %d %Y, %H:%M")
-        else:
-            expiry = 'N/A'
+        # Extract timestamps
+        eff = notam_data.get("effectiveStart")
+        exp = notam_data.get("effectiveEnd")
+        start_dt = datetime.fromisoformat(eff.replace("Z","")) if eff else None
+        end_dt = datetime.fromisoformat(exp.replace("Z","")) if exp else None
+        effective = start_dt.strftime("%b %d %Y, %H:%M") if start_dt else "N/A"
+        expiry = end_dt.strftime("%b %d %Y, %H:%M") if end_dt else "N/A"
+        sort_key = start_dt or datetime.min
 
         notams.append({
             "text": text_to_use,
             "effectiveStart": effective,
             "effectiveEnd": expiry,
+            "start_dt": start_dt,
+            "end_dt": end_dt,
             "sortKey": sort_key
         })
 
@@ -149,13 +140,23 @@ def get_faa_notams(icao: str):
 
 def format_notam_card(notam):
     highlighted_text = highlight_keywords(notam["text"])
+
+    # Calculate duration if both datetimes exist
+    duration_str = "N/A"
+    if notam.get("start_dt") and notam.get("end_dt"):
+        delta = notam["end_dt"] - notam["start_dt"]
+        hours, remainder = divmod(int(delta.total_seconds()), 3600)
+        minutes = remainder // 60
+        duration_str = f"{hours}h{minutes:02d}m"
+
     card_html = f"""
     <div style='border:1px solid #ccc; padding:10px; margin-bottom:8px; background-color:#111; color:#eee; border-radius:5px;'>
         <p style='margin:0; font-family:monospace; white-space:pre-wrap;'>{highlighted_text}</p>
-        <p style='margin:0; font-size:0.9em; color:#aaa;'>
-            <strong>Effective:</strong> {notam['effectiveStart']} |
-            <strong>Expires:</strong> {notam['effectiveEnd']}
-        </p>
+        <table style='margin-top:5px; font-size:0.9em; color:#aaa; width:100%; border-collapse:collapse;'>
+            <tr><td><strong>Effective:</strong></td><td>{notam['effectiveStart']}</td></tr>
+            <tr><td><strong>Expires:</strong></td><td>{notam['effectiveEnd']}</td></tr>
+            <tr><td><strong>Duration:</strong></td><td>{duration_str}</td></tr>
+        </table>
     </div>
     """
     return card_html
@@ -227,7 +228,8 @@ if icao_list:
                 "ICAO": airport["ICAO"],
                 "NOTAM": notam["text"],
                 "Effective": notam["effectiveStart"],
-                "Expires": notam["effectiveEnd"]
+                "Expires": notam["effectiveEnd"],
+                "Duration": duration_str
             })
 
     df_results = pd.DataFrame(all_results)
