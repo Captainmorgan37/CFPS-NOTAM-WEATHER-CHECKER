@@ -55,7 +55,10 @@ def get_faa_notams(icao: str):
     
     response = requests.get(url, headers=headers, params=params)
     response.raise_for_status()
-    return response.json()
+    data = response.json()
+    notams = [n.get("all", "") for n in data.get("notamList", [])]
+    return notams
+
 
 # --------------------------
 # User input
@@ -89,15 +92,12 @@ if icao_list:
 
     for icao in icao_list:
         try:
-            if icao.startswith("C"):  # Canadian airports → CFPS
-                data = get_cfps_data(icao)
-                notams = [n["text"] for n in data.get("notam", [])]
-                metar = "\n".join([m["text"] for m in data.get("metar", [])])
-                taf = "\n".join([t["text"] for t in data.get("taf", [])])
-            else:  # US airports → FAA
-                faa_data = get_faa_notams(icao)
-                notams = [n.get("all", "") for n in faa_data.get("notamList", [])]
-                metar, taf = "", ""  # FAA endpoint is NOTAM-only
+if icao.startswith("C"):
+    data = get_cfps_data(icao)
+    notams = [n["text"] for n in data.get("notam", [])]
+else:
+    notams = get_faa_notams(icao)
+
 
             results.append({
                 "ICAO": icao,
@@ -132,3 +132,4 @@ if icao_list:
         file_name="airport_data.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
