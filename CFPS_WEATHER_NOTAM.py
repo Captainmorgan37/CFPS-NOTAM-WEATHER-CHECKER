@@ -48,11 +48,33 @@ def get_faa_notams(icao: str):
         "client_id": FAA_CLIENT_ID,
         "client_secret": FAA_CLIENT_SECRET
     }
-    params = {"designators": icao}
+    params = {
+        "icaoLocation": icao.upper(),  # <-- Correct parameter
+        "responseFormat": "geoJson",   # Default but good to be explicit
+        "pageSize": 100                # Return more at once
+    }
+
     response = requests.get(url, headers=headers, params=params)
     response.raise_for_status()
     data = response.json()
-    return [n.get("all", "") for n in data.get("notamList", [])]
+
+    # Debug: see structure
+    st.write(f"FAA raw response for {icao}:", data)
+
+    # Extract NOTAM text depending on response structure
+    features = data.get("features", [])
+    notams = []
+    for f in features:
+        props = f.get("properties", {})
+        if "notam" in props:  # might be "notam", "text", or similar
+            notams.append(props["notam"])
+        elif "all" in props:
+            notams.append(props["all"])
+        elif "raw" in props:
+            notams.append(props["raw"])
+
+    return notams
+
 
 def highlight_keywords(notam_text: str):
     for kw in KEYWORDS:
@@ -125,5 +147,6 @@ if icao_list:
         file_name="notams.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
 
 
