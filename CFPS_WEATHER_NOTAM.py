@@ -80,20 +80,21 @@ def format_notam_card(notam):
             status_html = f"""
             <table class="notam-timestamps">
               <tr><td>Effective</td><td>{start_dt.strftime('%b %d %Y, %I:%M %p UTC')}</td></tr>
-              <tr><td>Expires</td><td>{end_dt.strftime('%b %d %Y, %I:%M %p UTC')}</td><td class="{status_class}">({status})</td></tr>
+              <tr><td>Expires</td><td>{end_dt.strftime('%b %d %Y, %I:%M %p UTC')}</td>
+                  <td class="{status_class}">({status})</td></tr>
             </table>
             """
         except:
             pass
 
-    # no trailing </div> problems — return complete card
-    return f"""
+    card_html = f"""
     <div class="notam-card">
       <div class="notam-text">{text}</div>
       <span class="notam-id">{notam_id}</span>
       {status_html}
     </div>
     """
+    return card_html.strip()
 
 
 # ----- FUNCTIONS -----
@@ -237,4 +238,5 @@ if icao_list:
             with st.expander(icao, expanded=False):
                 for n in notams:
                     st.markdown(format_notam_card(n), unsafe_allow_html=True)
+
 
