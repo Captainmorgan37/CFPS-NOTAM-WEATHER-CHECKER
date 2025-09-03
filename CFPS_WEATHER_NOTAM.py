@@ -66,42 +66,41 @@ def get_faa_notams(icao: str):
         core = props.get("coreNOTAMData", {})
         notam_data = core.get("notam", {})
 
-        # Extract the main NOTAM text
         notam_text = notam_data.get("text", "")
 
-        # Try to get the "simpleText" translation (nicer formatting)
+        # Try to get "simpleText" translation
         translations = core.get("notamTranslation", [])
         simple_text = None
         for t in translations:
             if t.get("type") == "LOCAL_FORMAT":
                 simple_text = t.get("simpleText")
 
-        # Build a clean string
         clean_entry = f"📌 {notam_data.get('number', '')} | {notam_data.get('classification', '')}\n"
-        if simple_text:
-            clean_entry += simple_text
-        else:
-            clean_entry += notam_text
-
+        clean_entry += simple_text if simple_text else notam_text
         notams.append(clean_entry.strip())
 
     return notams
 
-
-
 def highlight_keywords(notam_text: str):
     for kw in KEYWORDS:
-        notam_text = notam_text.replace(kw, f"<span style='color:red;font-weight:bold'>{kw}</span>")
+        notam_text = notam_text.replace(
+            kw, f"<span style='color:red;font-weight:bold'>{kw}</span>"
+        )
     return notam_text
 
 # ----- USER INPUT -----
-icao_input = st.text_input("Enter a single ICAO code (e.g., CYYC):").upper().strip()
-uploaded_file = st.file_uploader("Or upload an Excel/CSV with ICAO codes (column named 'ICAO')", type=["xlsx", "csv"])
+icao_input = st.text_input(
+    "Enter ICAO codes (comma separated, e.g., CYYC, CYVR, KJFK):"
+).upper().strip()
+uploaded_file = st.file_uploader(
+    "Or upload an Excel/CSV with ICAO codes (column named 'ICAO')",
+    type=["xlsx", "csv"]
+)
 
 icao_list = []
 
 if icao_input:
-    icao_list.append(icao_input)
+    icao_list.extend([x.strip() for x in icao_input.split(",") if x.strip()])
 
 if uploaded_file:
     try:
@@ -116,10 +115,13 @@ if uploaded_file:
     except Exception as e:
         st.error(f"Error reading file: {e}")
 
+icao_list = list(set(icao_list))  # deduplicate
+
 # ----- FETCH & DISPLAY -----
 if icao_list:
     st.write(f"Fetching NOTAMs for {len(icao_list)} airport(s)...")
-    results = []
+
+    canadian_results, faa_results = [], []
 
     for icao in icao_list:
         try:
@@ -127,30 +129,46 @@ if icao_list:
                 notams = get_cfps_notams(icao)
             else:
                 notams = get_faa_notams(icao)
-            
+
             combined_notams = "\n\n".join(notams) or "No NOTAMs available"
             highlighted_notams = highlight_keywords(combined_notams)
-
-            # Check if any keywords are present for header coloring
             header_color = "red" if any(kw in combined_notams for kw in KEYWORDS) else "black"
 
-            results.append({
+            entry = {
                 "ICAO": icao,
                 "NOTAMs": combined_notams,
                 "Highlighted": highlighted_notams,
                 "HeaderColor": header_color
-            })
+            }
+
+            if icao.startswith("C"):
+                canadian_results.append(entry)
+            else:
+                faa_results.append(entry)
+
         except Exception as e:
             st.warning(f"Failed to fetch data for {icao}: {e}")
 
-    # Display each ICAO nicely
-    st.subheader("NOTAMs")
-    for r in results:
-        with st.expander(f"{r['ICAO']}", expanded=False):
-            st.markdown(r["Highlighted"], unsafe_allow_html=True)
+    # ----- LAYOUT -----
+    col1, col2 = st.columns(2)
 
-    # Allow download as Excel
-    df_results = pd.DataFrame([{"ICAO": r["ICAO"], "NOTAMs": r["NOTAMs"]} for r in results])
+    with col1:
+        st.subheader("🇨🇦 Canadian NOTAMs (CFPS)")
+        for r in canadian_results:
+            with st.expander(f"{r['ICAO']}", expanded=False):
+                st.markdown(r["Highlighted"], unsafe_allow_html=True)
+
+    with col2:
+        st.subheader("🇺🇸 FAA NOTAMs")
+        for r in faa_results:
+            with st.expander(f"{r['ICAO']}", expanded=False):
+                st.markdown(r["Highlighted"], unsafe_allow_html=True)
+
+    # ----- DOWNLOAD -----
+    df_results = pd.DataFrame(
+        [{"ICAO": r["ICAO"], "NOTAMs": r["NOTAMs"]}
+         for r in canadian_results + faa_results]
+    )
     towrite = BytesIO()
     df_results.to_excel(towrite, index=False, engine="openpyxl")
     towrite.seek(0)
@@ -160,7 +178,3 @@ if icao_list:
         file_name="notams.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
-
-
-
-
