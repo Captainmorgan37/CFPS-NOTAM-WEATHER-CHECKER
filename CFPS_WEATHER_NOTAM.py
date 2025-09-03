@@ -37,9 +37,10 @@ def get_cfps_notams(icao: str):
                 notam_json = json.loads(n["text"])
                 notams.append({
                     "id": notam_json.get("id", ""),
-                    "text": notam_json.get("raw", ""),
-                    "effectiveStart": notam_json.get("startTime"),
-                    "effectiveEnd": notam_json.get("endTime")
+                    "text": notam_json.get("raw", n["text"]),
+                    # Try multiple possible fields for start/end
+                    "effectiveStart": notam_json.get("startTime") or notam_json.get("startDateTime"),
+                    "effectiveEnd": notam_json.get("endTime") or notam_json.get("endDateTime")
                 })
             except:
                 notams.append({
@@ -49,6 +50,7 @@ def get_cfps_notams(icao: str):
                     "effectiveEnd": None
                 })
     return notams
+
 
 def get_faa_notams(icao: str):
     url = "https://external-api.faa.gov/notamapi/v1/notams"
@@ -230,3 +232,4 @@ if icao_list:
         file_name="notams.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
