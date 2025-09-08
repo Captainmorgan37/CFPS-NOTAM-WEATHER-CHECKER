@@ -212,12 +212,24 @@ if uploaded_file:
             df = pd.read_csv(uploaded_file)
         else:
             df = pd.read_excel(uploaded_file)
-        if "ICAO" in df.columns:
-            icao_list.extend(df["ICAO"].dropna().str.upper().tolist())
+
+        # Define allowed column names
+        valid_columns = ["ICAO", "From (ICAO)", "To (ICAO)"]
+
+        found_codes = []
+        for col in valid_columns:
+            if col in df.columns:
+                found_codes.extend(df[col].dropna().astype(str).str.upper().tolist())
+
+        if found_codes:
+            # Deduplicate while preserving order
+            unique_codes = list(dict.fromkeys(found_codes))
+            icao_list.extend(unique_codes)
         else:
-            st.error("Uploaded file must have a column named 'ICAO'")
+            st.error("Uploaded file must have a column named 'ICAO', 'From (ICAO)', or 'To (ICAO)'")
     except Exception as e:
         st.error(f"Error reading file: {e}")
+
 
 # ----- FETCH & DISPLAY -----
 if icao_list:
@@ -273,4 +285,5 @@ if icao_list:
         file_name="notams.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
 
