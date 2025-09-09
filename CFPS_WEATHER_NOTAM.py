@@ -96,87 +96,135 @@ def get_cfps_notams(icao: str):
     return notams
 
 def get_faa_notams(icao: str):
-    url = "https://external-api.faa.gov/notamapi/v1/notams"
-    headers = {
-        "client_id": FAA_CLIENT_ID,
-        "client_secret": FAA_CLIENT_SECRET
-    }
-    params = {
-        "icaoLocation": icao.upper(),
-        "responseFormat": "geoJson",
-        "pageSize": 50
-    }
-
-    all_items = []
-    page_cursor = None
-
-    while True:
-        if page_cursor:
-            params["pageCursor"] = page_cursor
-
-        response = requests.get(url, headers=headers, params=params)
-        response.raise_for_status()
-        data = response.json()
-
-        items = data.get("items", [])
-        all_items.extend(items)
-
-        # FAA API gives a "nextPageCursor" if more data exists
-        page_cursor = data.get("nextPageCursor")
-        if not page_cursor:
-            break
-
     notams = []
 
-    for feature in all_items:
-        props = feature.get("properties", {})
-        core = props.get("coreNOTAMData", {})
-        notam_data = core.get("notam", {})
+    # 1. Try FAA Domestic (no auth required)
+    try:
+        url = f"https://notamsapi.faa.gov/notamapi/v1/notams/domestic?designators={icao.upper()}"
+        resp = requests.get(url, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
 
-        # Extract text
-        notam_text = notam_data.get("text", "")
-        translations = core.get("notamTranslation", [])
-        simple_text = None
-        for t in translations:
-            if t.get("type") == "LOCAL_FORMAT":
-                simple_text = t.get("simpleText")
-        text_to_use = simple_text if simple_text else notam_text
+        if "notams" in data:
+            for n in data["notams"]:
+                text_to_use = n.get("text", "").strip()
+                if any(hide_kw.lower() in text_to_use.lower() for hide_kw in HIDE_KEYWORDS):
+                    continue
 
-        if any(hide_kw.lower() in text_to_use.lower() for hide_kw in HIDE_KEYWORDS):
-            continue
+                start_dt = end_dt = None
+                effective_display, expiry_display = "N/A", "N/A"
 
-        effective = notam_data.get("effectiveStart", None)
-        expiry = notam_data.get("effectiveEnd", None)
+                eff = n.get("effectiveStart")
+                exp = n.get("effectiveEnd")
 
-        start_dt = end_dt = None
+                if eff:
+                    try:
+                        start_dt = datetime.fromisoformat(eff.replace("Z", ""))
+                        effective_display = start_dt.strftime("%b %d %Y, %H:%M")
+                    except:
+                        effective_display = eff
+                if exp:
+                    try:
+                        end_dt = datetime.fromisoformat(exp.replace("Z", ""))
+                        expiry_display = end_dt.strftime("%b %d %Y, %H:%M")
+                    except:
+                        expiry_display = exp
 
-        if effective == "PERM":
-            effective_display = "PERM"
-        elif effective:
-            start_dt = datetime.fromisoformat(effective.replace("Z", ""))
-            effective_display = start_dt.strftime("%b %d %Y, %H:%M")
-        else:
-            effective_display = "N/A"
+                notams.append({
+                    "text": text_to_use,
+                    "effectiveStart": effective_display,
+                    "effectiveEnd": expiry_display,
+                    "start_dt": start_dt,
+                    "end_dt": end_dt,
+                    "sortKey": start_dt if start_dt else datetime.min
+                })
 
-        if expiry == "PERM":
-            expiry_display = "PERM"
-        elif expiry:
-            end_dt = datetime.fromisoformat(expiry.replace("Z", ""))
-            expiry_display = end_dt.strftime("%b %d %Y, %H:%M")
-        else:
-            expiry_display = "N/A"
+        if notams:
+            notams.sort(key=lambda x: x["sortKey"], reverse=True)
+            return notams
 
-        notams.append({
-            "text": text_to_use,
-            "effectiveStart": effective_display,
-            "effectiveEnd": expiry_display,
-            "start_dt": start_dt,
-            "end_dt": end_dt,
-            "sortKey": start_dt if start_dt else datetime.min
-        })
+    except Exception as e:
+        print(f"[DEBUG] FAA Domestic fetch failed for {icao}: {e}")
+
+    # 2. Fallback → FAA GeoJSON (requires client_id/secret)
+    try:
+        url = "https://external-api.faa.gov/notamapi/v1/notams"
+        headers = {
+            "client_id": FAA_CLIENT_ID,
+            "client_secret": FAA_CLIENT_SECRET
+        }
+        params = {
+            "icaoLocation": icao.upper(),
+            "responseFormat": "geoJson",
+            "pageSize": 50
+        }
+
+        all_items = []
+        page_cursor = None
+
+        while True:
+            if page_cursor:
+                params["pageCursor"] = page_cursor
+
+            response = requests.get(url, headers=headers, params=params, timeout=15)
+            response.raise_for_status()
+            data = response.json()
+
+            items = data.get("items", [])
+            all_items.extend(items)
+
+            page_cursor = data.get("nextPageCursor")
+            if not page_cursor:
+                break
+
+        for feature in all_items:
+            props = feature.get("properties", {})
+            core = props.get("coreNOTAMData", {})
+            notam_data = core.get("notam", {})
+
+            text_to_use = notam_data.get("text", "")
+            translations = core.get("notamTranslation", [])
+            for t in translations:
+                if t.get("type") == "LOCAL_FORMAT":
+                    text_to_use = t.get("simpleText") or text_to_use
+
+            if any(hide_kw.lower() in text_to_use.lower() for hide_kw in HIDE_KEYWORDS):
+                continue
+
+            start_dt = end_dt = None
+            eff = notam_data.get("effectiveStart")
+            exp = notam_data.get("effectiveEnd")
+
+            effective_display, expiry_display = "N/A", "N/A"
+
+            if eff:
+                try:
+                    start_dt = datetime.fromisoformat(eff.replace("Z", ""))
+                    effective_display = start_dt.strftime("%b %d %Y, %H:%M")
+                except:
+                    effective_display = eff
+            if exp:
+                try:
+                    end_dt = datetime.fromisoformat(exp.replace("Z", ""))
+                    expiry_display = end_dt.strftime("%b %d %Y, %H:%M")
+                except:
+                    expiry_display = exp
+
+            notams.append({
+                "text": text_to_use,
+                "effectiveStart": effective_display,
+                "effectiveEnd": expiry_display,
+                "start_dt": start_dt,
+                "end_dt": end_dt,
+                "sortKey": start_dt if start_dt else datetime.min
+            })
+
+    except Exception as e:
+        st.warning(f"FAA GeoJSON fetch failed for {icao}: {e}")
 
     notams.sort(key=lambda x: x["sortKey"], reverse=True)
     return notams
+
 
 
 def format_notam_card(notam):
@@ -383,6 +431,7 @@ if icao_list:
         file_name="notams.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
 
 
 
