@@ -345,11 +345,13 @@ with tab1:
                     runways_status = get_runway_status(airport["ICAO"], airport["notams"])
                     if runways_status:
                         runway_table_html = "<table style='border-collapse: collapse; width:100%; color:#eee;'>"
-                        runway_table_html += "<tr><th>Runway</th><th>Length (ft)</th><th>Status</th></tr>"
+                        runway_table_html += "<tr><th>Runway</th><th>Length (ft)</th><th>Surface</th><th>Status</th></tr>"
+                        
                         for r in runways_status:
                             color = "#f00" if r["status"] == "closed" else "#0f0"
-                            runway_table_html += f"<tr><td>{r['runway']}</td><td>{r['length_ft']}</td><td style='color:{color}'>{r['status']}</td></tr>"
-                        runway_table_html += "</table>"
+                            surface = r.get("surface", "N/A")
+                            runway_table_html += f"<tr><td>{r['runway']}</td><td>{r['length_ft']}</td><td>{surface}</td><td style='color:{color}'>{r['status']}</td></tr>"
+
                         st.markdown(runway_table_html, unsafe_allow_html=True)
 
                     for notam in airport["notams"]:
@@ -425,6 +427,7 @@ with tab2:
 
         except Exception as e:
             st.error(f"FAA fetch failed for {debug_icao}: {e}")
+
 
 
 
