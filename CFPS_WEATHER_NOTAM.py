@@ -328,6 +328,12 @@ if uploaded_file:
     except Exception as e:
         st.error(f"Error reading file: {e}")
 
+# ----- ADD TABS -----
+tab1, tab2 = st.tabs(["CFPS/FAA Viewer", "FAA Debug"])
+
+# ----- TAB 1: Existing Viewer -----
+with tab1:
+
 # ----- FETCH & DISPLAY -----
 if icao_list:
     st.write(f"Fetching NOTAMs for {len(icao_list)} airport(s)...")
@@ -427,6 +433,71 @@ if icao_list:
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
+# ----- TAB 2: FAA Debug -----
+with tab2:
+    st.header("FAA NOTAM Debug - Raw Data")
+    debug_icao = st.text_input("Enter ICAO for raw FAA NOTAM debug", value="KSFO").upper().strip()
+    
+    if debug_icao:
+        st.write(f"Fetching raw FAA NOTAMs for {debug_icao}...")
+
+        # --- Domestic NOTAMs ---
+        try:
+            url_domestic = f"https://notamsapi.faa.gov/notamapi/v1/notams/domestic?designators={debug_icao}"
+            resp_domestic = requests.get(url_domestic, timeout=15)
+            resp_domestic.raise_for_status()
+            data_domestic = resp_domestic.json()
+            domestic_list = data_domestic.get("notams") or data_domestic.get("notamList") or []
+
+            st.subheader(f"Domestic NOTAMs ({len(domestic_list)})")
+            for n in domestic_list:
+                st.code(n.get("text", ""), language="text")
+
+        except Exception as e:
+            st.error(f"FAA Domestic fetch failed: {e}")
+
+        # --- GeoJSON NOTAMs ---
+        try:
+            url_geo = "https://external-api.faa.gov/notamapi/v1/notams"
+            headers = {
+                "client_id": FAA_CLIENT_ID,
+                "client_secret": FAA_CLIENT_SECRET
+            }
+            params = {
+                "icaoLocation": debug_icao,
+                "responseFormat": "geoJson",
+                "pageSize": 50
+            }
+
+            all_items = []
+            page_cursor = None
+
+            while True:
+                if page_cursor:
+                    params["pageCursor"] = page_cursor
+                resp_geo = requests.get(url_geo, headers=headers, params=params, timeout=15)
+                resp_geo.raise_for_status()
+                data_geo = resp_geo.json()
+                items = data_geo.get("items", [])
+                all_items.extend(items)
+                page_cursor = data_geo.get("nextPageCursor")
+                if not page_cursor:
+                    break
+
+            st.subheader(f"GeoJSON NOTAMs ({len(all_items)})")
+            for feature in all_items:
+                props = feature.get("properties", {})
+                core = props.get("coreNOTAMData", {})
+                notam_data = core.get("notam", {})
+                text = notam_data.get("text", "")
+                translations = core.get("notamTranslation", [])
+                for t in translations:
+                    if t.get("type") == "LOCAL_FORMAT":
+                        text = t.get("simpleText") or text
+                st.code(text, language="text")
+
+        except Exception as e:
+            st.error(f"FAA GeoJSON fetch failed: {e}")
 
 
 
