@@ -107,14 +107,28 @@ def get_faa_notams(icao: str):
         "pageSize": 50
     }
 
-    response = requests.get(url, headers=headers, params=params)
-    response.raise_for_status()
-    data = response.json()
+    all_items = []
+    page_cursor = None
 
-    items = data.get("items", [])
+    while True:
+        if page_cursor:
+            params["pageCursor"] = page_cursor
+
+        response = requests.get(url, headers=headers, params=params)
+        response.raise_for_status()
+        data = response.json()
+
+        items = data.get("items", [])
+        all_items.extend(items)
+
+        # FAA API gives a "nextPageCursor" if more data exists
+        page_cursor = data.get("nextPageCursor")
+        if not page_cursor:
+            break
+
     notams = []
 
-    for feature in items:
+    for feature in all_items:
         props = feature.get("properties", {})
         core = props.get("coreNOTAMData", {})
         notam_data = core.get("notam", {})
@@ -163,6 +177,7 @@ def get_faa_notams(icao: str):
 
     notams.sort(key=lambda x: x["sortKey"], reverse=True)
     return notams
+
 
 def format_notam_card(notam):
     highlighted_text = highlight_keywords(notam["text"])
@@ -368,6 +383,7 @@ if icao_list:
         file_name="notams.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
 
 
 
