@@ -104,7 +104,7 @@ def get_faa_notams(icao: str):
     params = {
         "icaoLocation": icao.upper(),
         "responseFormat": "geoJson",
-        "pageSize": 50
+        "pageSize": 100
     }
 
     all_items = []
@@ -419,3 +419,4 @@ with tab2:
 
         except Exception as e:
             st.error(f"FAA fetch failed for {debug_icao}: {e}")
+
