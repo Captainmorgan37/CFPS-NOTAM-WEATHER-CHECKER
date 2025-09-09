@@ -251,23 +251,51 @@ if icao_list:
         except Exception as e:
             st.warning(f"Failed to fetch data for {icao}: {e}")
 
+    # Create columns *inside* the if block
     col1, col2 = st.columns(2)
 
-with col1:
-    st.subheader("Canadian Airports (CFPS)")
-    for airport in cfps_list:
-        with st.expander(airport["ICAO"], expanded=False):
-            for notam in airport["notams"]:
-                if not filter_keyword or filter_keyword in notam["text"].lower():
-                    st.markdown(format_notam_card(notam), unsafe_allow_html=True)
+    # Filter input
+    filter_input = st.text_input("Filter NOTAMs by keywords (comma-separated):").strip().lower()
+    filter_terms = [t.strip() for t in filter_input.split(",") if t.strip()]
 
-with col2:
-    st.subheader("US Airports (FAA)")
-    for airport in faa_list:
-        with st.expander(airport["ICAO"], expanded=False):
-            for notam in airport["notams"]:
-                if not filter_keyword or filter_keyword in notam["text"].lower():
-                    st.markdown(format_notam_card(notam), unsafe_allow_html=True)
+    def matches_filter(text: str):
+        if not filter_terms:
+            return True
+        return any(term in text.lower() for term in filter_terms)
+
+    def highlight_search_terms(notam_text: str):
+        """Highlight user-entered search terms in yellow."""
+        highlighted = notam_text
+        for term in filter_terms:
+            highlighted = re.sub(
+                f"({re.escape(term)})",
+                r"<span style='background-color:yellow; font-weight:bold'>\1</span>",
+                highlighted,
+                flags=re.IGNORECASE,
+            )
+        return highlighted
+
+    with col1:
+        st.subheader("Canadian Airports (CFPS)")
+        for airport in cfps_list:
+            with st.expander(airport["ICAO"], expanded=False):
+                for notam in airport["notams"]:
+                    if matches_filter(notam["text"]):
+                        # Apply search highlighting + keyword highlighting
+                        notam_copy = notam.copy()
+                        notam_copy["text"] = highlight_search_terms(notam_copy["text"])
+                        st.markdown(format_notam_card(notam_copy), unsafe_allow_html=True)
+
+    with col2:
+        st.subheader("US Airports (FAA)")
+        for airport in faa_list:
+            with st.expander(airport["ICAO"], expanded=False):
+                for notam in airport["notams"]:
+                    if matches_filter(notam["text"]):
+                        notam_copy = notam.copy()
+                        notam_copy["text"] = highlight_search_terms(notam_copy["text"])
+                        st.markdown(format_notam_card(notam_copy), unsafe_allow_html=True)
+
 
 
     # Download Excel
@@ -291,6 +319,7 @@ with col2:
         file_name="notams.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
 
 
 
