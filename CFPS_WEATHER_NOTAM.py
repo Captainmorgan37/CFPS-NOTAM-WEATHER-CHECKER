@@ -10,12 +10,12 @@ from datetime import datetime, timedelta
 FAA_CLIENT_ID = st.secrets["FAA_CLIENT_ID"]
 FAA_CLIENT_SECRET = st.secrets["FAA_CLIENT_SECRET"]
 KEYWORDS = ["CLOSED", "CLSD"]  # Add any more keywords here
-HIDE_KEYWORDS = ["crane", "RUSSIAN", "CONGO"]  # Words to ignore
+HIDE_KEYWORDS = ["crane", "RUSSIAN", "CONGO"]  # Add words you want to hide
 
 st.set_page_config(page_title="CFPS/FAA NOTAM Viewer", layout="wide")
 st.title("CFPS & FAA NOTAM Viewer")
 
-# ----- RUNWAYS DATA -----
+# ----- LOAD RUNWAYS -----
 @st.cache_data
 def load_runway_data():
     df = pd.read_csv("runways.csv")
@@ -26,9 +26,7 @@ runways_df = load_runway_data()
 # ----- FUNCTIONS -----
 def highlight_keywords(notam_text: str):
     for kw in KEYWORDS:
-        notam_text = notam_text.replace(
-            kw, f"<span style='color:red;font-weight:bold'>{kw}</span>"
-        )
+        notam_text = notam_text.replace(kw, f"<span style='color:red;font-weight:bold'>{kw}</span>")
     return notam_text
 
 def parse_cfps_times(notam_text):
@@ -81,7 +79,6 @@ def get_cfps_notams(icao: str):
                 continue
 
             effective_start, effective_end, start_dt, end_dt = parse_cfps_times(notam_text)
-
             sort_key = start_dt if start_dt else datetime.min
             notams.append({
                 "text": notam_text,
@@ -133,9 +130,9 @@ def get_faa_notams(icao: str):
 
         effective = notam_data.get("effectiveStart", None)
         expiry = notam_data.get("effectiveEnd", None)
-
         start_dt = end_dt = None
 
+        # Handle effective
         if effective == "PERM":
             effective_display = "PERM"
         elif effective:
@@ -144,6 +141,7 @@ def get_faa_notams(icao: str):
         else:
             effective_display = "N/A"
 
+        # Handle expiry
         if expiry == "PERM":
             expiry_display = "PERM"
         elif expiry:
@@ -167,7 +165,7 @@ def get_faa_notams(icao: str):
 def format_notam_card(notam):
     highlighted_text = highlight_keywords(notam["text"])
 
-    # Duration
+    # Calculate duration
     if notam["start_dt"] and notam["end_dt"]:
         delta = notam["end_dt"] - notam["start_dt"]
         hours, remainder = divmod(delta.total_seconds(), 3600)
@@ -176,7 +174,7 @@ def format_notam_card(notam):
     else:
         duration_str = "N/A"
 
-    # Remaining
+    # Calculate time remaining
     now = datetime.utcnow()
     if notam["end_dt"]:
         remaining_delta = notam["end_dt"] - now
@@ -201,85 +199,81 @@ def format_notam_card(notam):
     """
     return card_html
 
-# ----- RUNWAY STATUS -----
-def is_runway_closed(notam_text, runway_name):
+# ----- RUNWAY DETECTION -----
+def is_runway_closed(notam_text):
+    """Return a list of runway strings closed according to NOTAM text."""
+    closed_runways = []
     text_upper = notam_text.upper()
-    runway_upper = runway_name.upper()
+    # Match RWY <name> ... CLSD
+    runway_pattern = r"RWY\s+(\d{1,2}[LRC]?(/\d{1,2}[LRC]?)?)\s+.*?CLSD"
+    matches = re.findall(runway_pattern, text_upper)
+    for match in matches:
+        if isinstance(match, tuple):
+            closed_runways.append(match[0])
+        else:
+            closed_runways.append(match)
+    return closed_runways
 
-    # Only proceed if runway name appears and a closure keyword is present
-    if runway_upper in text_upper and any(kw in text_upper for kw in KEYWORDS):
-        # Define phrases that indicate it's NOT a runway closure
-        false_positive_phrases = [
-            "TAXIWAY", "TWY BTN", "PAPI", "ILS", "EDGE LGT", "HLDG PSN"
-        ]
-        # If any of these phrases appear **and do not include the runway itself**, ignore
-        for phrase in false_positive_phrases:
-            if phrase in text_upper and runway_upper not in text_upper[text_upper.find(phrase):]:
-                return False
-        return True
-    return False
-
-
-def get_runway_status(icao: str, airport_notams: list):
-    airport_runways = runways_df[runways_df['airport_ident'] == icao.upper()]
-    status_list = []
-    for _, row in airport_runways.iterrows():
-        full_rwy_name = row['le_ident'] + '/' + row['he_ident'] if pd.notna(row['he_ident']) else row['le_ident']
-        closed = False
-        for n in airport_notams:
-            if is_runway_closed(n["text"], full_rwy_name):
-                closed = True
-                break
-        status_list.append({
-            "runway": full_rwy_name,
-            "length_ft": row['length_ft'],
-            "status": "closed" if closed else "open"
-        })
-    return status_list
+def get_runway_info(icao, closed_runways=[]):
+    """Return a list of runway strings for the airport, marking closed ones."""
+    df = runways_df[runways_df['ident'].str.startswith(icao)]
+    runway_lines = []
+    for _, row in df.iterrows():
+        name = row['le_ident']
+        if 'he_ident' in row and pd.notna(row['he_ident']):
+            name += f"/{row['he_ident']}"
+        closed_marker = ""
+        if name in closed_runways:
+            closed_marker = " (CLOSED)"
+        runway_lines.append(f"{name}{closed_marker} - {row['length_ft']} ft")
+    return runway_lines
 
 # ----- USER INPUT -----
-icao_input = st.text_input(
-    "Enter ICAO code(s) separated by commas (e.g., CYYC, KTEB):"
-).upper().strip()
-
-uploaded_file = st.file_uploader(
-    "Or upload an Excel/CSV with ICAO codes (columns: 'ICAO', 'From (ICAO)', 'To (ICAO)')",
-    type=["xlsx", "csv"]
-)
+icao_input = st.text_input("Enter ICAO code(s) separated by commas (e.g., CYYC, KTEB):").upper().strip()
+uploaded_file = st.file_uploader("Or upload an Excel/CSV with ICAO codes (column named 'ICAO')", type=["xlsx", "csv"])
 
 icao_list = []
+
 if icao_input:
     icao_list.extend([code.strip() for code in icao_input.split(",") if code.strip()])
 
 if uploaded_file:
     try:
-        df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith(".csv") else pd.read_excel(uploaded_file)
+        if uploaded_file.name.endswith(".csv"):
+            df = pd.read_csv(uploaded_file)
+        else:
+            df = pd.read_excel(uploaded_file)
+        valid_columns = ["ICAO", "From (ICAO)", "To (ICAO)"]
         found_codes = []
-        for col in ["ICAO", "From (ICAO)", "To (ICAO)"]:
+        for col in valid_columns:
             if col in df.columns:
                 found_codes.extend(df[col].dropna().astype(str).str.upper().tolist())
         if found_codes:
-            icao_list.extend(list(dict.fromkeys(found_codes)))
+            unique_codes = list(dict.fromkeys(found_codes))
+            icao_list.extend(unique_codes)
         else:
-            st.error("Uploaded file must have a valid ICAO column")
+            st.error("Uploaded file must have a column named 'ICAO', 'From (ICAO)', or 'To (ICAO)'")
     except Exception as e:
         st.error(f"Error reading file: {e}")
 
 # ----- FETCH & DISPLAY -----
 if icao_list:
     st.write(f"Fetching NOTAMs for {len(icao_list)} airport(s)...")
-    cfps_list, faa_list = [], []
+    cfps_list = []
+    faa_list = []
 
     for icao in icao_list:
         try:
             if icao.startswith("C"):
-                cfps_list.append({"ICAO": icao, "notams": get_cfps_notams(icao)})
+                notams = get_cfps_notams(icao)
+                cfps_list.append({"ICAO": icao, "notams": notams})
             else:
-                faa_list.append({"ICAO": icao, "notams": get_faa_notams(icao)})
+                notams = get_faa_notams(icao)
+                faa_list.append({"ICAO": icao, "notams": notams})
         except Exception as e:
             st.warning(f"Failed to fetch data for {icao}: {e}")
 
-    # Filter input
+    col1, col2 = st.columns(2)
     filter_input = st.text_input("Filter NOTAMs by keywords (comma-separated):").strip().lower()
     filter_terms = [t.strip() for t in filter_input.split(",") if t.strip()]
 
@@ -299,22 +293,19 @@ if icao_list:
             )
         return highlighted
 
-    col1, col2 = st.columns(2)
-
     with col1:
         st.subheader("Canadian Airports (CFPS)")
         for airport in cfps_list:
             with st.expander(airport["ICAO"], expanded=False):
-                # Runway status table
-                runways_status = get_runway_status(airport["ICAO"], airport["notams"])
-                if runways_status:
-                    runway_table_html = "<table style='border-collapse: collapse; width:100%; color:#eee;'>"
-                    runway_table_html += "<tr><th>Runway</th><th>Length (ft)</th><th>Status</th></tr>"
-                    for r in runways_status:
-                        color = "#f00" if r["status"] == "closed" else "#0f0"
-                        runway_table_html += f"<tr><td>{r['runway']}</td><td>{r['length_ft']}</td><td style='color:{color}'>{r['status']}</td></tr>"
-                    runway_table_html += "</table>"
-                    st.markdown(runway_table_html, unsafe_allow_html=True)
+                # Detect closed runways for highlighting
+                closed = []
+                for notam in airport["notams"]:
+                    closed += is_runway_closed(notam["text"])
+                closed = list(set(closed))
+
+                # Display runway info
+                runway_lines = get_runway_info(airport["ICAO"], closed_runways=closed)
+                st.text("\n".join(runway_lines))
 
                 for notam in airport["notams"]:
                     if matches_filter(notam["text"]):
@@ -326,16 +317,12 @@ if icao_list:
         st.subheader("US Airports (FAA)")
         for airport in faa_list:
             with st.expander(airport["ICAO"], expanded=False):
-                # Runway status table
-                runways_status = get_runway_status(airport["ICAO"], airport["notams"])
-                if runways_status:
-                    runway_table_html = "<table style='border-collapse: collapse; width:100%; color:#eee;'>"
-                    runway_table_html += "<tr><th>Runway</th><th>Length (ft)</th><th>Status</th></tr>"
-                    for r in runways_status:
-                        color = "#f00" if r["status"] == "closed" else "#0f0"
-                        runway_table_html += f"<tr><td>{r['runway']}</td><td>{r['length_ft']}</td><td style='color:{color}'>{r['status']}</td></tr>"
-                    runway_table_html += "</table>"
-                    st.markdown(runway_table_html, unsafe_allow_html=True)
+                closed = []
+                for notam in airport["notams"]:
+                    closed += is_runway_closed(notam["text"])
+                closed = list(set(closed))
+                runway_lines = get_runway_info(airport["ICAO"], closed_runways=closed)
+                st.text("\n".join(runway_lines))
 
                 for notam in airport["notams"]:
                     if matches_filter(notam["text"]):
@@ -353,6 +340,7 @@ if icao_list:
                 "Effective": notam["effectiveStart"],
                 "Expires": notam["effectiveEnd"]
             })
+
     df_results = pd.DataFrame(all_results)
     towrite = BytesIO()
     df_results.to_excel(towrite, index=False, engine="openpyxl")
@@ -363,4 +351,3 @@ if icao_list:
         file_name="notams.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
-
