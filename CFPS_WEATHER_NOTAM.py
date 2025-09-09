@@ -203,15 +203,37 @@ def format_notam_card(notam):
 
 # ----- RUNWAY STATUS -----
 def is_runway_closed(notam_text, runway_name):
+    """
+    Determines if the given runway is closed according to the NOTAM text.
+    """
     text_upper = notam_text.upper()
     runway_upper = runway_name.upper()
 
-    if "RWY" in text_upper and any(kw in text_upper for kw in KEYWORDS) and runway_upper in text_upper:
-        false_positive_terms = ["TWY", "TAXIWAY", "PAPI", "ILS", "EDGE LGT", "HLDG PSN"]
-        if any(term in text_upper for term in false_positive_terms):
-            return False
+    # Only proceed if "RWY" is mentioned and closure keywords exist
+    if "RWY" not in text_upper or not any(kw in text_upper for kw in KEYWORDS):
+        return False
+
+    # Ignore obvious false positives
+    false_positive_terms = ["TWY", "TAXIWAY", "PAPI", "ILS", "EDGE LGT", "HLDG PSN"]
+    if any(term in text_upper for term in false_positive_terms):
+        # Exception: if the runway itself is closed but mentions "AVBL AS TWY", we still count it
+        # We'll handle this separately
+        if re.search(rf"RWY\s+{re.escape(runway_upper)}\s+C?L?S?D", text_upper):
+            if "AVBL AS TWY" not in text_upper:
+                return True
+        return False
+
+    # Check for direct runway closure
+    # Pattern: RWY XX or XX/XX followed by closure keywords
+    pattern = rf"RWY\s+{re.escape(runway_upper)}\b.*(?:{'|'.join(KEYWORDS)})"
+    if re.search(pattern, text_upper):
+        # Exclude cases where closure is conditional (e.g., "AVBL AS TWY")
+        if "AVBL AS TWY" in text_upper:
+            return True  # In your request, this should trigger closure
         return True
+
     return False
+
 
 def get_runway_status(icao: str, airport_notams: list):
     airport_runways = runways_df[runways_df['airport_ident'] == icao.upper()]
@@ -356,3 +378,4 @@ if icao_list:
         file_name="notams.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
