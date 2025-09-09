@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 FAA_CLIENT_ID = st.secrets["FAA_CLIENT_ID"]
 FAA_CLIENT_SECRET = st.secrets["FAA_CLIENT_SECRET"]
 KEYWORDS = ["CLOSED", "CLSD"]  # Add any more keywords here
-HIDE_KEYWORDS = ["crane", "RUSSIAN", "CONGO", "OBST RIG", "CANCELLED", "CANCELED", "SAFETY AREA NOT STD", "GRASS CUTTING"]
+HIDE_KEYWORDS = ["crane", "RUSSIAN", "CONGO", "OBST RIG", "CANCELLED", "CANCELED", "SAFETY AREA NOT STD", "GRASS CUTTING"]  # Words to ignore
 
 st.set_page_config(page_title="CFPS/FAA NOTAM Viewer", layout="wide")
 st.title("CFPS & FAA NOTAM Viewer")
@@ -23,7 +23,7 @@ def load_runway_data():
 
 runways_df = load_runway_data()
 
-# ----- HELPER FUNCTIONS -----
+# ----- FUNCTIONS -----
 def highlight_keywords(notam_text: str):
     for kw in KEYWORDS:
         notam_text = notam_text.replace(
@@ -47,33 +47,6 @@ def parse_cfps_times(notam_text):
     end, end_dt = format_time(end_match.group(1)) if end_match else ('N/A', None)
     return start, end, start_dt, end_dt
 
-def normalize_surface(surface: str):
-    """
-    Normalize surface descriptions and flag unusable surfaces.
-    Returns: (normalized_surface_str, is_unusable_bool)
-    """
-    if not surface:
-        return "N/A", False
-
-    surface_upper = surface.upper()
-    unusable_surfaces = ["TURF", "GRASS", "WATER", "GRAVEL", "SOIL", "DIRT"]
-
-    # Check unusable first
-    for u in unusable_surfaces:
-        if u in surface_upper:
-            return surface.title(), True  # True = unusable
-
-    # Asphalt
-    if any(x in surface_upper for x in ["ASP", "ASPH", "ASPHALT"]):
-        return "Asphalt", False
-
-    # Concrete
-    if any(x in surface_upper for x in ["CON", "CONCRETE"]):
-        return "Concrete", False
-
-    return surface.title(), False
-
-# ----- FETCH FUNCTIONS -----
 def get_cfps_notams(icao: str):
     url = "https://plan.navcanada.ca/weather/api/alpha/"
     params = {
@@ -108,8 +81,8 @@ def get_cfps_notams(icao: str):
                 continue
 
             effective_start, effective_end, start_dt, end_dt = parse_cfps_times(notam_text)
-
             sort_key = start_dt if start_dt else datetime.min
+
             notams.append({
                 "text": notam_text,
                 "effectiveStart": effective_start,
@@ -144,10 +117,8 @@ def get_faa_notams(icao: str):
         response = requests.get(url, headers=headers, params=params)
         response.raise_for_status()
         data = response.json()
-
         items = data.get("items", [])
         all_items.extend(items)
-
         page_cursor = data.get("nextPageCursor")
         if not page_cursor:
             break
@@ -159,7 +130,6 @@ def get_faa_notams(icao: str):
         core = props.get("coreNOTAMData", {})
         notam_data = core.get("notam", {})
 
-        # Extract text
         notam_text = notam_data.get("text", "")
         translations = core.get("notamTranslation", [])
         simple_text = None
@@ -175,7 +145,6 @@ def get_faa_notams(icao: str):
         expiry = notam_data.get("effectiveEnd", None)
 
         start_dt = end_dt = None
-
         if effective == "PERM":
             effective_display = "PERM"
         elif effective:
@@ -204,41 +173,8 @@ def get_faa_notams(icao: str):
     notams.sort(key=lambda x: x["sortKey"], reverse=True)
     return notams
 
-# ----- RUNWAY STATUS -----
-def is_runway_closed(notam_text, runway_name):
-    text_upper = notam_text.upper()
-    runway_upper = runway_name.upper()
-    direct_rwy_pattern = rf"RWY\s+{re.escape(runway_upper)}\b.*(?:{'|'.join(KEYWORDS)})"
-    twy_context_pattern = rf"TWY\s+[A-Z0-9]+.*RWY\s+{re.escape(runway_upper)}"
-    if re.search(direct_rwy_pattern, text_upper):
-        if not re.search(twy_context_pattern, text_upper):
-            return True
-        if "AVBL AS TWY" in text_upper:
-            return True
-    return False
-
-def get_runway_status(icao: str, airport_notams: list):
-    airport_runways = runways_df[runways_df['airport_ident'] == icao.upper()]
-    status_list = []
-    for _, row in airport_runways.iterrows():
-        full_rwy_name = row['le_ident'] + '/' + row['he_ident'] if pd.notna(row['he_ident']) else row['le_ident']
-        closed = False
-        for n in airport_notams:
-            if is_runway_closed(n["text"], full_rwy_name):
-                closed = True
-                break
-        status_list.append({
-            "runway": full_rwy_name,
-            "length_ft": row['length_ft'],
-            "surface": row.get('surface', 'N/A'),
-            "status": "closed" if closed else "open"
-        })
-    return status_list
-
-# ----- NOTAM CARD -----
 def format_notam_card(notam):
     highlighted_text = highlight_keywords(notam["text"])
-
     if notam["start_dt"] and notam["end_dt"]:
         delta = notam["end_dt"] - notam["start_dt"]
         hours, remainder = divmod(delta.total_seconds(), 3600)
@@ -271,8 +207,56 @@ def format_notam_card(notam):
     """
     return card_html
 
+# ----- RUNWAY STATUS -----
+def is_runway_closed(notam_text, runway_name):
+    text_upper = notam_text.upper()
+    runway_upper = runway_name.upper()
+    direct_rwy_pattern = rf"RWY\s+{re.escape(runway_upper)}\b.*(?:{'|'.join(KEYWORDS)})"
+    twy_context_pattern = rf"TWY\s+[A-Z0-9]+.*RWY\s+{re.escape(runway_upper)}"
+    if re.search(direct_rwy_pattern, text_upper):
+        if not re.search(twy_context_pattern, text_upper):
+            return True
+        if "AVBL AS TWY" in text_upper:
+            return True
+    return False
+
+def normalize_surface(surface):
+    s = str(surface).upper()
+    if any(a in s for a in ["ASP", "ASPH", "ASPHALT"]):
+        return "Asphalt", True
+    elif any(c in s for c in ["CON", "CONC", "CONCRETE"]):
+        return "Concrete", True
+    else:
+        return s.title(), False  # unusable
+
+def get_runway_status(icao: str, airport_notams: list):
+    airport_runways = runways_df[runways_df['airport_ident'] == icao.upper()]
+    status_list = []
+    for _, row in airport_runways.iterrows():
+        full_rwy_name = row['le_ident'] + '/' + row['he_ident'] if pd.notna(row['he_ident']) else row['le_ident']
+        closed = False
+        for n in airport_notams:
+            if is_runway_closed(n["text"], full_rwy_name):
+                closed = True
+                break
+
+        surface_normalized, usable = normalize_surface(row.get('surface', 'Unknown'))
+
+        status_list.append({
+            "runway": full_rwy_name,
+            "length_ft": row['length_ft'],
+            "surface": surface_normalized,
+            "usable": usable,
+            "status": "closed" if closed else "open"
+        })
+
+    return status_list
+
 # ----- USER INPUT -----
-icao_input = st.text_input("Enter ICAO code(s) separated by commas (e.g., CYYC, KTEB):").upper().strip()
+icao_input = st.text_input(
+    "Enter ICAO code(s) separated by commas (e.g., CYYC, KTEB):"
+).upper().strip()
+
 uploaded_file = st.file_uploader(
     "Or upload an Excel/CSV with ICAO codes (columns: 'ICAO', 'From (ICAO)', 'To (ICAO)')",
     type=["xlsx", "csv"]
@@ -314,6 +298,7 @@ with tab1:
             except Exception as e:
                 st.warning(f"Failed to fetch data for {icao}: {e}")
 
+        # Filter input
         filter_input = st.text_input("Filter NOTAMs by keywords (comma-separated):").strip().lower()
         filter_terms = [t.strip() for t in filter_input.split(",") if t.strip()]
 
@@ -335,7 +320,6 @@ with tab1:
 
         col1, col2 = st.columns(2)
 
-        # ---------- CFPS ----------
         with col1:
             st.subheader("Canadian Airports (CFPS)")
             for airport in cfps_list:
@@ -344,13 +328,10 @@ with tab1:
                     if runways_status:
                         runway_table_html = "<table style='border-collapse: collapse; width:100%; color:#eee;'>"
                         runway_table_html += "<tr><th>Runway</th><th>Length (ft)</th><th>Surface</th><th>Status</th></tr>"
-
                         for r in runways_status:
                             color = "#f00" if r["status"] == "closed" else "#0f0"
-                            surface, unusable = normalize_surface(r.get("surface", "N/A"))
-                            surface_display = f"<span style='color:red'>{surface}</span>" if unusable else surface
-                            runway_table_html += f"<tr><td>{r['runway']}</td><td>{r['length_ft']}</td><td>{surface_display}</td><td style='color:{color}'>{r['status']}</td></tr>"
-
+                            surface_color = "#f00" if not r["usable"] else "#0f0"
+                            runway_table_html += f"<tr><td>{r['runway']}</td><td>{r['length_ft']}</td><td style='color:{surface_color}'>{r['surface']}</td><td style='color:{color}'>{r['status']}</td></tr>"
                         runway_table_html += "</table>"
                         st.markdown(runway_table_html, unsafe_allow_html=True)
 
@@ -360,7 +341,6 @@ with tab1:
                             notam_copy["text"] = highlight_search_terms(notam_copy["text"])
                             st.markdown(format_notam_card(notam_copy), unsafe_allow_html=True)
 
-        # ---------- FAA ----------
         with col2:
             st.subheader("US Airports (FAA)")
             for airport in faa_list:
@@ -369,13 +349,10 @@ with tab1:
                     if runways_status:
                         runway_table_html = "<table style='border-collapse: collapse; width:100%; color:#eee;'>"
                         runway_table_html += "<tr><th>Runway</th><th>Length (ft)</th><th>Surface</th><th>Status</th></tr>"
-
                         for r in runways_status:
                             color = "#f00" if r["status"] == "closed" else "#0f0"
-                            surface, unusable = normalize_surface(r.get("surface", "N/A"))
-                            surface_display = f"<span style='color:red'>{surface}</span>" if unusable else surface
-                            runway_table_html += f"<tr><td>{r['runway']}</td><td>{r['length_ft']}</td><td>{surface_display}</td><td style='color:{color}'>{r['status']}</td></tr>"
-
+                            surface_color = "#f00" if not r["usable"] else "#0f0"
+                            runway_table_html += f"<tr><td>{r['runway']}</td><td>{r['length_ft']}</td><td style='color:{surface_color}'>{r['surface']}</td><td style='color:{color}'>{r['status']}</td></tr>"
                         runway_table_html += "</table>"
                         st.markdown(runway_table_html, unsafe_allow_html=True)
 
@@ -385,7 +362,7 @@ with tab1:
                             notam_copy["text"] = highlight_search_terms(notam_copy["text"])
                             st.markdown(format_notam_card(notam_copy), unsafe_allow_html=True)
 
-        # ---------- Excel Download ----------
+        # Download Excel
         all_results = []
         for airport in cfps_list + faa_list:
             for notam in airport["notams"]:
