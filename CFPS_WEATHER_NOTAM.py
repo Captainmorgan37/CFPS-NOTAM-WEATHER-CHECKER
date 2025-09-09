@@ -25,28 +25,28 @@ runways_df = load_runway_data()
 
 def get_runway_info(icao_code, closed_runways=None):
     df = runways_df[runways_df['airport_ident'].str.upper() == icao_code.upper()]
-    runway_pairs = {}
-    for _, row in df.iterrows():
-        pair_id = row['runway_id']
-        if pair_id not in runway_pairs:
-            runway_pairs[pair_id] = {'length_ft': row['length_ft'], 'ends': set()}
-        end = row['le_ident']
-        if pd.notna(end) and end.strip() != '':
-            runway_pairs[pair_id]['ends'].add(end.strip())
-
     info = []
-    for pair in runway_pairs.values():
-        ends_sorted = sorted(pair['ends'])
-        ends_str = "/".join(ends_sorted)
-        length = pair['length_ft']
+
+    for _, row in df.iterrows():
+        le = str(row['le_ident']).strip() if pd.notna(row['le_ident']) else ''
+        he = str(row['he_ident']).strip() if pd.notna(row['he_ident']) else ''
+        if not le and not he:
+            continue
+
+        ends = []
+        if le: ends.append(le)
+        if he and he != le: ends.append(he)  # avoid duplicate if same
+        ends_str = "/".join(ends)
+        length = row['length_ft']
         length_str = f"{int(length)} ft" if not pd.isna(length) else "N/A"
 
-        if closed_runways and any(r in closed_runways for r in pair['ends']):
+        if closed_runways and any(r in closed_runways for r in ends):
             line_html = f"<span style='color:red;font-weight:bold'>{ends_str} - {length_str}</span>"
         else:
             line_html = f"{ends_str} - {length_str}"
         info.append(line_html)
     return info
+
 
 # ----- FUNCTIONS -----
 def highlight_keywords(notam_text: str):
@@ -347,3 +347,4 @@ if icao_list:
         file_name="notams.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
