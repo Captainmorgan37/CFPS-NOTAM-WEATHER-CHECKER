@@ -203,36 +203,26 @@ def format_notam_card(notam):
 
 # ----- RUNWAY STATUS -----
 def is_runway_closed(notam_text, runway_name):
-    """
-    Determines if the given runway is closed according to the NOTAM text.
-    """
     text_upper = notam_text.upper()
     runway_upper = runway_name.upper()
 
-    # Only proceed if "RWY" is mentioned and closure keywords exist
-    if "RWY" not in text_upper or not any(kw in text_upper for kw in KEYWORDS):
-        return False
+    # Pattern to match direct runway closure:
+    # "RWY XX" or "RWY XX/XX" followed by "CLSD" or "CLOSED"
+    direct_rwy_pattern = rf"RWY\s+{re.escape(runway_upper)}\b.*(?:{'|'.join(KEYWORDS)})"
 
-    # Ignore obvious false positives
-    false_positive_terms = ["TWY", "TAXIWAY", "PAPI", "ILS", "EDGE LGT", "HLDG PSN"]
-    if any(term in text_upper for term in false_positive_terms):
-        # Exception: if the runway itself is closed but mentions "AVBL AS TWY", we still count it
-        # We'll handle this separately
-        if re.search(rf"RWY\s+{re.escape(runway_upper)}\s+C?L?S?D", text_upper):
-            if "AVBL AS TWY" not in text_upper:
-                return True
-        return False
+    # Pattern to detect TWY context that should NOT trigger closure
+    twy_context_pattern = rf"TWY\s+[A-Z0-9]+.*RWY\s+{re.escape(runway_upper)}"
 
-    # Check for direct runway closure
-    # Pattern: RWY XX or XX/XX followed by closure keywords
-    pattern = rf"RWY\s+{re.escape(runway_upper)}\b.*(?:{'|'.join(KEYWORDS)})"
-    if re.search(pattern, text_upper):
-        # Exclude cases where closure is conditional (e.g., "AVBL AS TWY")
+    # If direct closure found and not in TWY context, mark as closed
+    if re.search(direct_rwy_pattern, text_upper):
+        if not re.search(twy_context_pattern, text_upper):
+            return True
+        # Special case: RWY XX/XX CLSD AVBL AS TWY should count as closure
         if "AVBL AS TWY" in text_upper:
-            return True  # In your request, this should trigger closure
-        return True
+            return True
 
     return False
+
 
 
 def get_runway_status(icao: str, airport_notams: list):
@@ -378,4 +368,5 @@ if icao_list:
         file_name="notams.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
 
