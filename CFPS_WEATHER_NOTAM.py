@@ -206,12 +206,19 @@ def is_runway_closed(notam_text, runway_name):
     text_upper = notam_text.upper()
     runway_upper = runway_name.upper()
 
-    if "RWY" in text_upper and any(kw in text_upper for kw in KEYWORDS) and runway_upper in text_upper:
-        false_positive_terms = ["TWY", "TAXIWAY", "PAPI", "ILS", "EDGE LGT", "HLDG PSN"]
-        if any(term in text_upper for term in false_positive_terms):
-            return False
+    # Only proceed if runway name appears and a closure keyword is present
+    if runway_upper in text_upper and any(kw in text_upper for kw in KEYWORDS):
+        # Define phrases that indicate it's NOT a runway closure
+        false_positive_phrases = [
+            "TAXIWAY", "TWY BTN", "PAPI", "ILS", "EDGE LGT", "HLDG PSN"
+        ]
+        # If any of these phrases appear **and do not include the runway itself**, ignore
+        for phrase in false_positive_phrases:
+            if phrase in text_upper and runway_upper not in text_upper[text_upper.find(phrase):]:
+                return False
         return True
     return False
+
 
 def get_runway_status(icao: str, airport_notams: list):
     airport_runways = runways_df[runways_df['airport_ident'] == icao.upper()]
@@ -356,3 +363,4 @@ if icao_list:
         file_name="notams.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
