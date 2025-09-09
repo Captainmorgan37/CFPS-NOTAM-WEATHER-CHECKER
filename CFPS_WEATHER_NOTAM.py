@@ -230,6 +230,9 @@ if uploaded_file:
     except Exception as e:
         st.error(f"Error reading file: {e}")
 
+# ----- FILTER INPUT -----
+filter_keyword = st.text_input("Filter NOTAMs by keyword (leave blank to show all):").strip().lower()
+
 
 # ----- FETCH & DISPLAY -----
 if icao_list:
@@ -250,19 +253,22 @@ if icao_list:
 
     col1, col2 = st.columns(2)
 
-    with col1:
-        st.subheader("Canadian Airports (CFPS)")
-        for airport in cfps_list:
-            with st.expander(airport["ICAO"], expanded=False):
-                for notam in airport["notams"]:
+with col1:
+    st.subheader("Canadian Airports (CFPS)")
+    for airport in cfps_list:
+        with st.expander(airport["ICAO"], expanded=False):
+            for notam in airport["notams"]:
+                if not filter_keyword or filter_keyword in notam["text"].lower():
                     st.markdown(format_notam_card(notam), unsafe_allow_html=True)
 
-    with col2:
-        st.subheader("US Airports (FAA)")
-        for airport in faa_list:
-            with st.expander(airport["ICAO"], expanded=False):
-                for notam in airport["notams"]:
+with col2:
+    st.subheader("US Airports (FAA)")
+    for airport in faa_list:
+        with st.expander(airport["ICAO"], expanded=False):
+            for notam in airport["notams"]:
+                if not filter_keyword or filter_keyword in notam["text"].lower():
                     st.markdown(format_notam_card(notam), unsafe_allow_html=True)
+
 
     # Download Excel
     all_results = []
@@ -285,5 +291,6 @@ if icao_list:
         file_name="notams.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
 
 
