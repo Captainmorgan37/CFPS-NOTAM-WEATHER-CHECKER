@@ -98,66 +98,61 @@ def get_cfps_notams(icao: str):
 def get_faa_notams(icao: str):
     notams = []
 
-    # 1. Try FAA Domestic (no auth required)
+    # --- Step 1: Try FAA Domestic (no auth) ---
     try:
         url = f"https://notamsapi.faa.gov/notamapi/v1/notams/domestic?designators={icao.upper()}"
         resp = requests.get(url, timeout=15)
         resp.raise_for_status()
         data = resp.json()
 
-        if "notams" in data:
-            for n in data["notams"]:
-                text_to_use = n.get("text", "").strip()
-                if any(hide_kw.lower() in text_to_use.lower() for hide_kw in HIDE_KEYWORDS):
-                    continue
+        # Domestic sometimes uses "notams" or "notamList"
+        domestic_list = data.get("notams") or data.get("notamList") or []
 
-                start_dt = end_dt = None
-                effective_display, expiry_display = "N/A", "N/A"
+        for n in domestic_list:
+            text_to_use = n.get("text", "").strip()
+            if any(hide_kw.lower() in text_to_use.lower() for hide_kw in HIDE_KEYWORDS):
+                continue
 
-                eff = n.get("effectiveStart")
-                exp = n.get("effectiveEnd")
+            start_dt = end_dt = None
+            effective_display, expiry_display = "N/A", "N/A"
 
-                if eff:
-                    try:
-                        start_dt = datetime.fromisoformat(eff.replace("Z", ""))
-                        effective_display = start_dt.strftime("%b %d %Y, %H:%M")
-                    except:
-                        effective_display = eff
-                if exp:
-                    try:
-                        end_dt = datetime.fromisoformat(exp.replace("Z", ""))
-                        expiry_display = end_dt.strftime("%b %d %Y, %H:%M")
-                    except:
-                        expiry_display = exp
+            eff = n.get("effectiveStart")
+            exp = n.get("effectiveEnd")
 
-                notams.append({
-                    "text": text_to_use,
-                    "effectiveStart": effective_display,
-                    "effectiveEnd": expiry_display,
-                    "start_dt": start_dt,
-                    "end_dt": end_dt,
-                    "sortKey": start_dt if start_dt else datetime.min
-                })
+            if eff:
+                try:
+                    start_dt = datetime.fromisoformat(eff.replace("Z", ""))
+                    effective_display = start_dt.strftime("%b %d %Y, %H:%M")
+                except:
+                    effective_display = eff
+            if exp:
+                try:
+                    end_dt = datetime.fromisoformat(exp.replace("Z", ""))
+                    expiry_display = end_dt.strftime("%b %d %Y, %H:%M")
+                except:
+                    expiry_display = exp
 
-        if notams:
+            notams.append({
+                "text": text_to_use,
+                "effectiveStart": effective_display,
+                "effectiveEnd": expiry_display,
+                "start_dt": start_dt,
+                "end_dt": end_dt,
+                "sortKey": start_dt if start_dt else datetime.min
+            })
+
+        if notams:  # ✅ only stop if we actually got results
             notams.sort(key=lambda x: x["sortKey"], reverse=True)
             return notams
 
     except Exception as e:
         print(f"[DEBUG] FAA Domestic fetch failed for {icao}: {e}")
 
-    # 2. Fallback → FAA GeoJSON (requires client_id/secret)
+    # --- Step 2: Fallback to FAA GeoJSON (auth required) ---
     try:
         url = "https://external-api.faa.gov/notamapi/v1/notams"
-        headers = {
-            "client_id": FAA_CLIENT_ID,
-            "client_secret": FAA_CLIENT_SECRET
-        }
-        params = {
-            "icaoLocation": icao.upper(),
-            "responseFormat": "geoJson",
-            "pageSize": 50
-        }
+        headers = {"client_id": FAA_CLIENT_ID, "client_secret": FAA_CLIENT_SECRET}
+        params = {"icaoLocation": icao.upper(), "responseFormat": "geoJson", "pageSize": 50}
 
         all_items = []
         page_cursor = None
@@ -431,6 +426,7 @@ if icao_list:
         file_name="notams.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
 
 
 
