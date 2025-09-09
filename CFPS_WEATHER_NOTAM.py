@@ -96,131 +96,86 @@ def get_cfps_notams(icao: str):
     return notams
 
 def get_faa_notams(icao: str):
+    url = "https://external-api.faa.gov/notamapi/v1/notams"
+    headers = {
+        "client_id": FAA_CLIENT_ID,
+        "client_secret": FAA_CLIENT_SECRET
+    }
+    params = {
+        "icaoLocation": icao.upper(),
+        "responseFormat": "geoJson",
+        "pageSize": 50
+    }
+
+    all_items = []
+    page_cursor = None
+
+    while True:
+        if page_cursor:
+            params["pageCursor"] = page_cursor
+
+        response = requests.get(url, headers=headers, params=params)
+        response.raise_for_status()
+        data = response.json()
+
+        items = data.get("items", [])
+        all_items.extend(items)
+
+        page_cursor = data.get("nextPageCursor")
+        if not page_cursor:
+            break
+
     notams = []
 
-    # --- Step 1: Try FAA Domestic (no auth) ---
-    try:
-        url = f"https://notamsapi.faa.gov/notamapi/v1/notams/domestic?designators={icao.upper()}"
-        resp = requests.get(url, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
+    for feature in all_items:
+        props = feature.get("properties", {})
+        core = props.get("coreNOTAMData", {})
+        notam_data = core.get("notam", {})
 
-        # Domestic sometimes uses "notams" or "notamList"
-        domestic_list = data.get("notams") or data.get("notamList") or []
+        # Extract text
+        notam_text = notam_data.get("text", "")
+        translations = core.get("notamTranslation", [])
+        simple_text = None
+        for t in translations:
+            if t.get("type") == "LOCAL_FORMAT":
+                simple_text = t.get("simpleText")
+        text_to_use = simple_text if simple_text else notam_text
 
-        for n in domestic_list:
-            text_to_use = n.get("text", "").strip()
-            if any(hide_kw.lower() in text_to_use.lower() for hide_kw in HIDE_KEYWORDS):
-                continue
+        if any(hide_kw.lower() in text_to_use.lower() for hide_kw in HIDE_KEYWORDS):
+            continue
 
-            start_dt = end_dt = None
-            effective_display, expiry_display = "N/A", "N/A"
+        effective = notam_data.get("effectiveStart", None)
+        expiry = notam_data.get("effectiveEnd", None)
 
-            eff = n.get("effectiveStart")
-            exp = n.get("effectiveEnd")
+        start_dt = end_dt = None
 
-            if eff:
-                try:
-                    start_dt = datetime.fromisoformat(eff.replace("Z", ""))
-                    effective_display = start_dt.strftime("%b %d %Y, %H:%M")
-                except:
-                    effective_display = eff
-            if exp:
-                try:
-                    end_dt = datetime.fromisoformat(exp.replace("Z", ""))
-                    expiry_display = end_dt.strftime("%b %d %Y, %H:%M")
-                except:
-                    expiry_display = exp
+        if effective == "PERM":
+            effective_display = "PERM"
+        elif effective:
+            start_dt = datetime.fromisoformat(effective.replace("Z", ""))
+            effective_display = start_dt.strftime("%b %d %Y, %H:%M")
+        else:
+            effective_display = "N/A"
 
-            notams.append({
-                "text": text_to_use,
-                "effectiveStart": effective_display,
-                "effectiveEnd": expiry_display,
-                "start_dt": start_dt,
-                "end_dt": end_dt,
-                "sortKey": start_dt if start_dt else datetime.min
-            })
+        if expiry == "PERM":
+            expiry_display = "PERM"
+        elif expiry:
+            end_dt = datetime.fromisoformat(expiry.replace("Z", ""))
+            expiry_display = end_dt.strftime("%b %d %Y, %H:%M")
+        else:
+            expiry_display = "N/A"
 
-        if notams:  # ✅ only stop if we actually got results
-            notams.sort(key=lambda x: x["sortKey"], reverse=True)
-            return notams
-
-    except Exception as e:
-        print(f"[DEBUG] FAA Domestic fetch failed for {icao}: {e}")
-
-    # --- Step 2: Fallback to FAA GeoJSON (auth required) ---
-    try:
-        url = "https://external-api.faa.gov/notamapi/v1/notams"
-        headers = {"client_id": FAA_CLIENT_ID, "client_secret": FAA_CLIENT_SECRET}
-        params = {"icaoLocation": icao.upper(), "responseFormat": "geoJson", "pageSize": 50}
-
-        all_items = []
-        page_cursor = None
-
-        while True:
-            if page_cursor:
-                params["pageCursor"] = page_cursor
-
-            response = requests.get(url, headers=headers, params=params, timeout=15)
-            response.raise_for_status()
-            data = response.json()
-
-            items = data.get("items", [])
-            all_items.extend(items)
-
-            page_cursor = data.get("nextPageCursor")
-            if not page_cursor:
-                break
-
-        for feature in all_items:
-            props = feature.get("properties", {})
-            core = props.get("coreNOTAMData", {})
-            notam_data = core.get("notam", {})
-
-            text_to_use = notam_data.get("text", "")
-            translations = core.get("notamTranslation", [])
-            for t in translations:
-                if t.get("type") == "LOCAL_FORMAT":
-                    text_to_use = t.get("simpleText") or text_to_use
-
-            if any(hide_kw.lower() in text_to_use.lower() for hide_kw in HIDE_KEYWORDS):
-                continue
-
-            start_dt = end_dt = None
-            eff = notam_data.get("effectiveStart")
-            exp = notam_data.get("effectiveEnd")
-
-            effective_display, expiry_display = "N/A", "N/A"
-
-            if eff:
-                try:
-                    start_dt = datetime.fromisoformat(eff.replace("Z", ""))
-                    effective_display = start_dt.strftime("%b %d %Y, %H:%M")
-                except:
-                    effective_display = eff
-            if exp:
-                try:
-                    end_dt = datetime.fromisoformat(exp.replace("Z", ""))
-                    expiry_display = end_dt.strftime("%b %d %Y, %H:%M")
-                except:
-                    expiry_display = exp
-
-            notams.append({
-                "text": text_to_use,
-                "effectiveStart": effective_display,
-                "effectiveEnd": expiry_display,
-                "start_dt": start_dt,
-                "end_dt": end_dt,
-                "sortKey": start_dt if start_dt else datetime.min
-            })
-
-    except Exception as e:
-        st.warning(f"FAA GeoJSON fetch failed for {icao}: {e}")
+        notams.append({
+            "text": text_to_use,
+            "effectiveStart": effective_display,
+            "effectiveEnd": expiry_display,
+            "start_dt": start_dt,
+            "end_dt": end_dt,
+            "sortKey": start_dt if start_dt else datetime.min
+        })
 
     notams.sort(key=lambda x: x["sortKey"], reverse=True)
     return notams
-
-
 
 def format_notam_card(notam):
     highlighted_text = highlight_keywords(notam["text"])
@@ -263,25 +218,14 @@ def format_notam_card(notam):
 def is_runway_closed(notam_text, runway_name):
     text_upper = notam_text.upper()
     runway_upper = runway_name.upper()
-
-    # Pattern to match direct runway closure:
-    # "RWY XX" or "RWY XX/XX" followed by "CLSD" or "CLOSED"
     direct_rwy_pattern = rf"RWY\s+{re.escape(runway_upper)}\b.*(?:{'|'.join(KEYWORDS)})"
-
-    # Pattern to detect TWY context that should NOT trigger closure
     twy_context_pattern = rf"TWY\s+[A-Z0-9]+.*RWY\s+{re.escape(runway_upper)}"
-
-    # If direct closure found and not in TWY context, mark as closed
     if re.search(direct_rwy_pattern, text_upper):
         if not re.search(twy_context_pattern, text_upper):
             return True
-        # Special case: RWY XX/XX CLSD AVBL AS TWY should count as closure
         if "AVBL AS TWY" in text_upper:
             return True
-
     return False
-
-
 
 def get_runway_status(icao: str, airport_notams: list):
     airport_runways = runways_df[runways_df['airport_ident'] == icao.upper()]
@@ -328,137 +272,116 @@ if uploaded_file:
     except Exception as e:
         st.error(f"Error reading file: {e}")
 
-# ----- ADD TABS -----
+# ----- TABS -----
 tab1, tab2 = st.tabs(["CFPS/FAA Viewer", "FAA Debug"])
 
-# ----- TAB 1: Existing Viewer -----
+# ---------------- Tab 1: CFPS/FAA Viewer ----------------
 with tab1:
+    if icao_list:
+        st.write(f"Fetching NOTAMs for {len(icao_list)} airport(s)...")
+        cfps_list, faa_list = [], []
 
-# ----- FETCH & DISPLAY -----
-if icao_list:
-    st.write(f"Fetching NOTAMs for {len(icao_list)} airport(s)...")
-    cfps_list, faa_list = [], []
+        for icao in icao_list:
+            try:
+                if icao.startswith("C"):
+                    cfps_list.append({"ICAO": icao, "notams": get_cfps_notams(icao)})
+                else:
+                    faa_list.append({"ICAO": icao, "notams": get_faa_notams(icao)})
+            except Exception as e:
+                st.warning(f"Failed to fetch data for {icao}: {e}")
 
-    for icao in icao_list:
-        try:
-            if icao.startswith("C"):
-                cfps_list.append({"ICAO": icao, "notams": get_cfps_notams(icao)})
-            else:
-                faa_list.append({"ICAO": icao, "notams": get_faa_notams(icao)})
-        except Exception as e:
-            st.warning(f"Failed to fetch data for {icao}: {e}")
+        # Filter input
+        filter_input = st.text_input("Filter NOTAMs by keywords (comma-separated):").strip().lower()
+        filter_terms = [t.strip() for t in filter_input.split(",") if t.strip()]
 
-    # Filter input
-    filter_input = st.text_input("Filter NOTAMs by keywords (comma-separated):").strip().lower()
-    filter_terms = [t.strip() for t in filter_input.split(",") if t.strip()]
+        def matches_filter(text: str):
+            if not filter_terms:
+                return True
+            return any(term in text.lower() for term in filter_terms)
 
-    def matches_filter(text: str):
-        if not filter_terms:
-            return True
-        return any(term in text.lower() for term in filter_terms)
+        def highlight_search_terms(notam_text: str):
+            highlighted = notam_text
+            for term in filter_terms:
+                highlighted = re.sub(
+                    f"({re.escape(term)})",
+                    r"<span style='background-color:rgba(255, 255, 0, 0.3); font-weight:bold'>\1</span>",
+                    highlighted,
+                    flags=re.IGNORECASE,
+                )
+            return highlighted
 
-    def highlight_search_terms(notam_text: str):
-        highlighted = notam_text
-        for term in filter_terms:
-            highlighted = re.sub(
-                f"({re.escape(term)})",
-                r"<span style='background-color:rgba(255, 255, 0, 0.3); font-weight:bold'>\1</span>",
-                highlighted,
-                flags=re.IGNORECASE,
-            )
-        return highlighted
+        col1, col2 = st.columns(2)
 
-    col1, col2 = st.columns(2)
+        with col1:
+            st.subheader("Canadian Airports (CFPS)")
+            for airport in cfps_list:
+                with st.expander(airport["ICAO"], expanded=False):
+                    runways_status = get_runway_status(airport["ICAO"], airport["notams"])
+                    if runways_status:
+                        runway_table_html = "<table style='border-collapse: collapse; width:100%; color:#eee;'>"
+                        runway_table_html += "<tr><th>Runway</th><th>Length (ft)</th><th>Status</th></tr>"
+                        for r in runways_status:
+                            color = "#f00" if r["status"] == "closed" else "#0f0"
+                            runway_table_html += f"<tr><td>{r['runway']}</td><td>{r['length_ft']}</td><td style='color:{color}'>{r['status']}</td></tr>"
+                        runway_table_html += "</table>"
+                        st.markdown(runway_table_html, unsafe_allow_html=True)
 
-    with col1:
-        st.subheader("Canadian Airports (CFPS)")
-        for airport in cfps_list:
-            with st.expander(airport["ICAO"], expanded=False):
-                # Runway status table
-                runways_status = get_runway_status(airport["ICAO"], airport["notams"])
-                if runways_status:
-                    runway_table_html = "<table style='border-collapse: collapse; width:100%; color:#eee;'>"
-                    runway_table_html += "<tr><th>Runway</th><th>Length (ft)</th><th>Status</th></tr>"
-                    for r in runways_status:
-                        color = "#f00" if r["status"] == "closed" else "#0f0"
-                        runway_table_html += f"<tr><td>{r['runway']}</td><td>{r['length_ft']}</td><td style='color:{color}'>{r['status']}</td></tr>"
-                    runway_table_html += "</table>"
-                    st.markdown(runway_table_html, unsafe_allow_html=True)
+                    for notam in airport["notams"]:
+                        if matches_filter(notam["text"]):
+                            notam_copy = notam.copy()
+                            notam_copy["text"] = highlight_search_terms(notam_copy["text"])
+                            st.markdown(format_notam_card(notam_copy), unsafe_allow_html=True)
 
-                for notam in airport["notams"]:
-                    if matches_filter(notam["text"]):
-                        notam_copy = notam.copy()
-                        notam_copy["text"] = highlight_search_terms(notam_copy["text"])
-                        st.markdown(format_notam_card(notam_copy), unsafe_allow_html=True)
+        with col2:
+            st.subheader("US Airports (FAA)")
+            for airport in faa_list:
+                with st.expander(airport["ICAO"], expanded=False):
+                    runways_status = get_runway_status(airport["ICAO"], airport["notams"])
+                    if runways_status:
+                        runway_table_html = "<table style='border-collapse: collapse; width:100%; color:#eee;'>"
+                        runway_table_html += "<tr><th>Runway</th><th>Length (ft)</th><th>Status</th></tr>"
+                        for r in runways_status:
+                            color = "#f00" if r["status"] == "closed" else "#0f0"
+                            runway_table_html += f"<tr><td>{r['runway']}</td><td>{r['length_ft']}</td><td style='color:{color}'>{r['status']}</td></tr>"
+                        runway_table_html += "</table>"
+                        st.markdown(runway_table_html, unsafe_allow_html=True)
 
-    with col2:
-        st.subheader("US Airports (FAA)")
-        for airport in faa_list:
-            with st.expander(airport["ICAO"], expanded=False):
-                # Runway status table
-                runways_status = get_runway_status(airport["ICAO"], airport["notams"])
-                if runways_status:
-                    runway_table_html = "<table style='border-collapse: collapse; width:100%; color:#eee;'>"
-                    runway_table_html += "<tr><th>Runway</th><th>Length (ft)</th><th>Status</th></tr>"
-                    for r in runways_status:
-                        color = "#f00" if r["status"] == "closed" else "#0f0"
-                        runway_table_html += f"<tr><td>{r['runway']}</td><td>{r['length_ft']}</td><td style='color:{color}'>{r['status']}</td></tr>"
-                    runway_table_html += "</table>"
-                    st.markdown(runway_table_html, unsafe_allow_html=True)
+                    for notam in airport["notams"]:
+                        if matches_filter(notam["text"]):
+                            notam_copy = notam.copy()
+                            notam_copy["text"] = highlight_search_terms(notam_copy["text"])
+                            st.markdown(format_notam_card(notam_copy), unsafe_allow_html=True)
 
-                for notam in airport["notams"]:
-                    if matches_filter(notam["text"]):
-                        notam_copy = notam.copy()
-                        notam_copy["text"] = highlight_search_terms(notam_copy["text"])
-                        st.markdown(format_notam_card(notam_copy), unsafe_allow_html=True)
+        # Download Excel
+        all_results = []
+        for airport in cfps_list + faa_list:
+            for notam in airport["notams"]:
+                all_results.append({
+                    "ICAO": airport["ICAO"],
+                    "NOTAM": notam["text"],
+                    "Effective": notam["effectiveStart"],
+                    "Expires": notam["effectiveEnd"]
+                })
+        df_results = pd.DataFrame(all_results)
+        towrite = BytesIO()
+        df_results.to_excel(towrite, index=False, engine="openpyxl")
+        towrite.seek(0)
+        st.download_button(
+            label="Download All NOTAMs as Excel",
+            data=towrite,
+            file_name="notams.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
-    # Download Excel
-    all_results = []
-    for airport in cfps_list + faa_list:
-        for notam in airport["notams"]:
-            all_results.append({
-                "ICAO": airport["ICAO"],
-                "NOTAM": notam["text"],
-                "Effective": notam["effectiveStart"],
-                "Expires": notam["effectiveEnd"]
-            })
-    df_results = pd.DataFrame(all_results)
-    towrite = BytesIO()
-    df_results.to_excel(towrite, index=False, engine="openpyxl")
-    towrite.seek(0)
-    st.download_button(
-        label="Download All NOTAMs as Excel",
-        data=towrite,
-        file_name="notams.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
-
-# ----- TAB 2: FAA Debug -----
+# ---------------- Tab 2: FAA Debug ----------------
 with tab2:
     st.header("FAA NOTAM Debug - Raw Data")
     debug_icao = st.text_input("Enter ICAO for raw FAA NOTAM debug", value="KSFO").upper().strip()
-    
+
     if debug_icao:
         st.write(f"Fetching raw FAA NOTAMs for {debug_icao}...")
-
-        # --- Domestic NOTAMs ---
         try:
-            url_domestic = f"https://notamsapi.faa.gov/notamapi/v1/notams/domestic?designators={debug_icao}"
-            resp_domestic = requests.get(url_domestic, timeout=15)
-            resp_domestic.raise_for_status()
-            data_domestic = resp_domestic.json()
-            domestic_list = data_domestic.get("notams") or data_domestic.get("notamList") or []
-
-            st.subheader(f"Domestic NOTAMs ({len(domestic_list)})")
-            for n in domestic_list:
-                st.code(n.get("text", ""), language="text")
-
-        except Exception as e:
-            st.error(f"FAA Domestic fetch failed: {e}")
-
-        # --- GeoJSON NOTAMs ---
-        try:
-            url_geo = "https://external-api.faa.gov/notamapi/v1/notams"
+            url = "https://external-api.faa.gov/notamapi/v1/notams"
             headers = {
                 "client_id": FAA_CLIENT_ID,
                 "client_secret": FAA_CLIENT_SECRET
@@ -475,31 +398,24 @@ with tab2:
             while True:
                 if page_cursor:
                     params["pageCursor"] = page_cursor
-                resp_geo = requests.get(url_geo, headers=headers, params=params, timeout=15)
-                resp_geo.raise_for_status()
-                data_geo = resp_geo.json()
-                items = data_geo.get("items", [])
+
+                response = requests.get(url, headers=headers, params=params)
+                response.raise_for_status()
+                data = response.json()
+                items = data.get("items", [])
                 all_items.extend(items)
-                page_cursor = data_geo.get("nextPageCursor")
+                page_cursor = data.get("nextPageCursor")
                 if not page_cursor:
                     break
 
-            st.subheader(f"GeoJSON NOTAMs ({len(all_items)})")
+            st.write(f"Total NOTAMs received: {len(all_items)}")
+
             for feature in all_items:
                 props = feature.get("properties", {})
                 core = props.get("coreNOTAMData", {})
                 notam_data = core.get("notam", {})
                 text = notam_data.get("text", "")
-                translations = core.get("notamTranslation", [])
-                for t in translations:
-                    if t.get("type") == "LOCAL_FORMAT":
-                        text = t.get("simpleText") or text
-                st.code(text, language="text")
+                st.text(text)
 
         except Exception as e:
-            st.error(f"FAA GeoJSON fetch failed: {e}")
-
-
-
-
-
+            st.error(f"FAA fetch failed for {debug_icao}: {e}")
