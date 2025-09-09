@@ -230,9 +230,6 @@ if uploaded_file:
     except Exception as e:
         st.error(f"Error reading file: {e}")
 
-# ----- FILTER INPUT -----
-filter_keyword = st.text_input("Filter NOTAMs by keyword (leave blank to show all):").strip().lower()
-
 
 # ----- FETCH & DISPLAY -----
 if icao_list:
@@ -319,6 +316,7 @@ if icao_list:
         file_name="notams.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
 
 
 
