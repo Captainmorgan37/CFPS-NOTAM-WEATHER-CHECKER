@@ -216,7 +216,8 @@ def is_runway_closed(notam_text):
 
 def get_runway_info(icao, closed_runways=[]):
     """Return a list of runway strings for the airport, marking closed ones."""
-    df = runways_df[runways_df['ident'].str.startswith(icao)]
+    # Adjusted column name
+    df = runways_df[runways_df['airport_ident'].str.upper() == icao.upper()]
     runway_lines = []
     for _, row in df.iterrows():
         name = row['le_ident']
@@ -227,6 +228,7 @@ def get_runway_info(icao, closed_runways=[]):
             closed_marker = " (CLOSED)"
         runway_lines.append(f"{name}{closed_marker} - {row['length_ft']} ft")
     return runway_lines
+
 
 # ----- USER INPUT -----
 icao_input = st.text_input("Enter ICAO code(s) separated by commas (e.g., CYYC, KTEB):").upper().strip()
@@ -351,3 +353,4 @@ if icao_list:
         file_name="notams.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
