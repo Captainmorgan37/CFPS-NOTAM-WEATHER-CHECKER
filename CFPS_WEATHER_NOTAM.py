@@ -266,10 +266,11 @@ if icao_list:
         for term in filter_terms:
             highlighted = re.sub(
                 f"({re.escape(term)})",
-                r"<span style='background-color:yellow; font-weight:bold'>\1</span>",
+                r"<span style='background-color:rgba(255, 255, 0, 0.3); font-weight:bold'>\1</span>",
                 highlighted,
                 flags=re.IGNORECASE,
             )
+
         return highlighted
 
     with col1:
@@ -316,6 +317,7 @@ if icao_list:
         file_name="notams.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
 
 
 
