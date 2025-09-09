@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 FAA_CLIENT_ID = st.secrets["FAA_CLIENT_ID"]
 FAA_CLIENT_SECRET = st.secrets["FAA_CLIENT_SECRET"]
 KEYWORDS = ["CLOSED", "CLSD"]  # Add any more keywords here
-HIDE_KEYWORDS = ["crane", "RUSSIAN", "CONGO", "OBST RIG", "CANCELLED", "CANCELED", "SAFETY AREA NOT STD", "GRASS CUTTING"]  # Words to ignore
+HIDE_KEYWORDS = ["crane", "RUSSIAN", "CONGO", "OBST RIG", "CANCELLED", "CANCELED", "SAFETY AREA NOT STD", "GRASS CUTTING"]
 
 st.set_page_config(page_title="CFPS/FAA NOTAM Viewer", layout="wide")
 st.title("CFPS & FAA NOTAM Viewer")
@@ -23,7 +23,7 @@ def load_runway_data():
 
 runways_df = load_runway_data()
 
-# ----- FUNCTIONS -----
+# ----- HELPER FUNCTIONS -----
 def highlight_keywords(notam_text: str):
     for kw in KEYWORDS:
         notam_text = notam_text.replace(
@@ -47,6 +47,33 @@ def parse_cfps_times(notam_text):
     end, end_dt = format_time(end_match.group(1)) if end_match else ('N/A', None)
     return start, end, start_dt, end_dt
 
+def normalize_surface(surface: str):
+    """
+    Normalize surface descriptions and flag unusable surfaces.
+    Returns: (normalized_surface_str, is_unusable_bool)
+    """
+    if not surface:
+        return "N/A", False
+
+    surface_upper = surface.upper()
+    unusable_surfaces = ["TURF", "GRASS", "WATER", "GRAVEL", "SOIL", "DIRT"]
+
+    # Check unusable first
+    for u in unusable_surfaces:
+        if u in surface_upper:
+            return surface.title(), True  # True = unusable
+
+    # Asphalt
+    if any(x in surface_upper for x in ["ASP", "ASPH", "ASPHALT"]):
+        return "Asphalt", False
+
+    # Concrete
+    if any(x in surface_upper for x in ["CON", "CONCRETE"]):
+        return "Concrete", False
+
+    return surface.title(), False
+
+# ----- FETCH FUNCTIONS -----
 def get_cfps_notams(icao: str):
     url = "https://plan.navcanada.ca/weather/api/alpha/"
     params = {
@@ -177,43 +204,6 @@ def get_faa_notams(icao: str):
     notams.sort(key=lambda x: x["sortKey"], reverse=True)
     return notams
 
-def format_notam_card(notam):
-    highlighted_text = highlight_keywords(notam["text"])
-
-    # Duration
-    if notam["start_dt"] and notam["end_dt"]:
-        delta = notam["end_dt"] - notam["start_dt"]
-        hours, remainder = divmod(delta.total_seconds(), 3600)
-        minutes = remainder // 60
-        duration_str = f"{int(hours)}h{int(minutes):02d}m"
-    else:
-        duration_str = "N/A"
-
-    # Remaining
-    now = datetime.utcnow()
-    if notam["end_dt"]:
-        remaining_delta = notam["end_dt"] - now
-        if remaining_delta.total_seconds() > 0:
-            rem_hours, rem_remainder = divmod(remaining_delta.total_seconds(), 3600)
-            rem_minutes = rem_remainder // 60
-            remaining_str = f"(in {int(rem_hours)}h{int(rem_minutes):02d}m)"
-        else:
-            remaining_str = "(expired)"
-    else:
-        remaining_str = ""
-
-    card_html = f"""
-    <div style='border:1px solid #ccc; padding:10px; margin-bottom:8px; background-color:#111; color:#eee; border-radius:5px;'>
-        <p style='margin:0; font-family:monospace; white-space:pre-wrap;'>{highlighted_text}</p>
-        <table style='margin-top:5px; font-size:0.9em; color:#aaa; width:100%;'>
-            <tr><td><strong>Effective:</strong></td><td>{notam['effectiveStart']}</td><td>{remaining_str}</td></tr>
-            <tr><td><strong>Expires:</strong></td><td>{notam['effectiveEnd']}</td></tr>
-            <tr><td><strong>Duration:</strong></td><td>{duration_str}</td></tr>
-        </table>
-    </div>
-    """
-    return card_html
-
 # ----- RUNWAY STATUS -----
 def is_runway_closed(notam_text, runway_name):
     text_upper = notam_text.upper()
@@ -240,17 +230,49 @@ def get_runway_status(icao: str, airport_notams: list):
         status_list.append({
             "runway": full_rwy_name,
             "length_ft": row['length_ft'],
-            "surface": row['surface'],  # <-- add this
+            "surface": row.get('surface', 'N/A'),
             "status": "closed" if closed else "open"
-})
-
+        })
     return status_list
 
-# ----- USER INPUT -----
-icao_input = st.text_input(
-    "Enter ICAO code(s) separated by commas (e.g., CYYC, KTEB):"
-).upper().strip()
+# ----- NOTAM CARD -----
+def format_notam_card(notam):
+    highlighted_text = highlight_keywords(notam["text"])
 
+    if notam["start_dt"] and notam["end_dt"]:
+        delta = notam["end_dt"] - notam["start_dt"]
+        hours, remainder = divmod(delta.total_seconds(), 3600)
+        minutes = remainder // 60
+        duration_str = f"{int(hours)}h{int(minutes):02d}m"
+    else:
+        duration_str = "N/A"
+
+    now = datetime.utcnow()
+    if notam["end_dt"]:
+        remaining_delta = notam["end_dt"] - now
+        if remaining_delta.total_seconds() > 0:
+            rem_hours, rem_remainder = divmod(remaining_delta.total_seconds(), 3600)
+            rem_minutes = rem_remainder // 60
+            remaining_str = f"(in {int(rem_hours)}h{int(rem_minutes):02d}m)"
+        else:
+            remaining_str = "(expired)"
+    else:
+        remaining_str = ""
+
+    card_html = f"""
+    <div style='border:1px solid #ccc; padding:10px; margin-bottom:8px; background-color:#111; color:#eee; border-radius:5px;'>
+        <p style='margin:0; font-family:monospace; white-space:pre-wrap;'>{highlighted_text}</p>
+        <table style='margin-top:5px; font-size:0.9em; color:#aaa; width:100%;'>
+            <tr><td><strong>Effective:</strong></td><td>{notam['effectiveStart']}</td><td>{remaining_str}</td></tr>
+            <tr><td><strong>Expires:</strong></td><td>{notam['effectiveEnd']}</td></tr>
+            <tr><td><strong>Duration:</strong></td><td>{duration_str}</td></tr>
+        </table>
+    </div>
+    """
+    return card_html
+
+# ----- USER INPUT -----
+icao_input = st.text_input("Enter ICAO code(s) separated by commas (e.g., CYYC, KTEB):").upper().strip()
 uploaded_file = st.file_uploader(
     "Or upload an Excel/CSV with ICAO codes (columns: 'ICAO', 'From (ICAO)', 'To (ICAO)')",
     type=["xlsx", "csv"]
@@ -292,7 +314,6 @@ with tab1:
             except Exception as e:
                 st.warning(f"Failed to fetch data for {icao}: {e}")
 
-        # Filter input
         filter_input = st.text_input("Filter NOTAMs by keywords (comma-separated):").strip().lower()
         filter_terms = [t.strip() for t in filter_input.split(",") if t.strip()]
 
@@ -314,6 +335,7 @@ with tab1:
 
         col1, col2 = st.columns(2)
 
+        # ---------- CFPS ----------
         with col1:
             st.subheader("Canadian Airports (CFPS)")
             for airport in cfps_list:
@@ -322,14 +344,14 @@ with tab1:
                     if runways_status:
                         runway_table_html = "<table style='border-collapse: collapse; width:100%; color:#eee;'>"
                         runway_table_html += "<tr><th>Runway</th><th>Length (ft)</th><th>Surface</th><th>Status</th></tr>"
-                        
+
                         for r in runways_status:
                             color = "#f00" if r["status"] == "closed" else "#0f0"
-                            surface = r.get("surface", "N/A")  # Add this
-                            runway_table_html += f"<tr><td>{r['runway']}</td><td>{r['length_ft']}</td><td>{surface}</td><td style='color:{color}'>{r['status']}</td></tr>"
-                        
-                        runway_table_html += "</table>"
+                            surface, unusable = normalize_surface(r.get("surface", "N/A"))
+                            surface_display = f"<span style='color:red'>{surface}</span>" if unusable else surface
+                            runway_table_html += f"<tr><td>{r['runway']}</td><td>{r['length_ft']}</td><td>{surface_display}</td><td style='color:{color}'>{r['status']}</td></tr>"
 
+                        runway_table_html += "</table>"
                         st.markdown(runway_table_html, unsafe_allow_html=True)
 
                     for notam in airport["notams"]:
@@ -338,6 +360,7 @@ with tab1:
                             notam_copy["text"] = highlight_search_terms(notam_copy["text"])
                             st.markdown(format_notam_card(notam_copy), unsafe_allow_html=True)
 
+        # ---------- FAA ----------
         with col2:
             st.subheader("US Airports (FAA)")
             for airport in faa_list:
@@ -346,12 +369,14 @@ with tab1:
                     if runways_status:
                         runway_table_html = "<table style='border-collapse: collapse; width:100%; color:#eee;'>"
                         runway_table_html += "<tr><th>Runway</th><th>Length (ft)</th><th>Surface</th><th>Status</th></tr>"
-                        
+
                         for r in runways_status:
                             color = "#f00" if r["status"] == "closed" else "#0f0"
-                            surface = r.get("surface", "N/A")
-                            runway_table_html += f"<tr><td>{r['runway']}</td><td>{r['length_ft']}</td><td>{surface}</td><td style='color:{color}'>{r['status']}</td></tr>"
+                            surface, unusable = normalize_surface(r.get("surface", "N/A"))
+                            surface_display = f"<span style='color:red'>{surface}</span>" if unusable else surface
+                            runway_table_html += f"<tr><td>{r['runway']}</td><td>{r['length_ft']}</td><td>{surface_display}</td><td style='color:{color}'>{r['status']}</td></tr>"
 
+                        runway_table_html += "</table>"
                         st.markdown(runway_table_html, unsafe_allow_html=True)
 
                     for notam in airport["notams"]:
@@ -360,7 +385,7 @@ with tab1:
                             notam_copy["text"] = highlight_search_terms(notam_copy["text"])
                             st.markdown(format_notam_card(notam_copy), unsafe_allow_html=True)
 
-        # Download Excel
+        # ---------- Excel Download ----------
         all_results = []
         for airport in cfps_list + faa_list:
             for notam in airport["notams"]:
@@ -427,11 +452,3 @@ with tab2:
 
         except Exception as e:
             st.error(f"FAA fetch failed for {debug_icao}: {e}")
-
-
-
-
-
-
-
-
