@@ -15,6 +15,7 @@ HIDE_KEYWORDS = ["crane", "RUSSIAN", "CONGO", "OBST RIG", "CANCELLED", "CANCELED
 
 CATEGORY_COLORS = {
     "Runway": "#ff4d4d",
+    "PPR": "#4caf50",
     "Airspace/Navigation": "#4da6ff",
     "Airport Services": "#ffa64d",
     "Other": "#ccc"
@@ -57,6 +58,8 @@ def parse_cfps_times(notam_text):
 
 def categorize_notam(notam_text):
     text_upper = notam_text.upper()
+    if "PPR" in text_upper:  # NEW: PPR category
+        return "PPR"
     if any(rwy_kw in text_upper for rwy_kw in ["RWY", "RUNWAY"]):
         return "Runway"
     elif any(air_kw in text_upper for air_kw in ["SID", "STAR", "APPROACH", "AIRSPACE", "NAVIGATION", "FDC"]):
@@ -223,8 +226,11 @@ def format_notam_card(notam):
     else:
         remaining_str = ""
 
+    # Highlight PPR category more prominently
+    border_style = f"3px solid {category_color}" if notam["category"] in ["Runway", "PPR"] else "1px solid #ccc"
+
     card_html = f"""
-    <div style='border:1px solid #ccc; padding:10px; margin-bottom:8px; background-color:#111; color:#eee; border-radius:5px;'>
+    <div style='border:{border_style}; padding:10px; margin-bottom:8px; background-color:#111; color:#eee; border-radius:5px;'>
         <p style='margin:0; font-family:monospace;'><strong style="color:{category_color}">[{notam['category']}]</strong></p>
         <p style='margin:0; font-family:monospace; white-space:pre-wrap;'>{highlighted_text}</p>
         <table style='margin-top:5px; font-size:0.9em; color:#aaa; width:100%;'>
@@ -300,8 +306,9 @@ def get_runway_status(icao: str, airport_notams: list):
     return status_list
 
 def sort_notams_for_display(notams):
+    CATEGORY_ORDER = ["Runway", "PPR", "Airspace/Navigation", "Airport Services", "Other"]
     def sort_key(n):
-        return (0 if n["category"] == "Runway" else 1, n["category"], n["sortKey"])
+        return (CATEGORY_ORDER.index(n["category"]) if n["category"] in CATEGORY_ORDER else 99, n["sortKey"])
     return sorted(notams, key=sort_key)
 
 # ----- USER INPUT -----
@@ -482,4 +489,3 @@ with tab2:
 
         except Exception as e:
             st.error(f"FAA fetch failed for {debug_icao}: {e}")
-
