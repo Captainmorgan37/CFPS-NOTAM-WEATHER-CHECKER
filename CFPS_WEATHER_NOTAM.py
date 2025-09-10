@@ -331,14 +331,25 @@ with tab1:
             except Exception as e:
                 st.warning(f"Failed to fetch data for {icao}: {e}")
 
-        # Filter input
+        # --- Filter inputs ---
         filter_input = st.text_input("Filter NOTAMs by keywords (comma-separated):").strip().lower()
         filter_terms = [t.strip() for t in filter_input.split(",") if t.strip()]
+
+        category_filter = st.multiselect(
+            "Filter by NOTAM category",
+            ["Runway/Taxiway", "Navigation/NAVAID", "Airspace/Restrictions", "Airport Services", "Weather/Hazards", "Misc/Other"],
+            default=[]
+        )
 
         def matches_filter(text: str):
             if not filter_terms:
                 return True
             return any(term in text.lower() for term in filter_terms)
+
+        def matches_category(notam):
+            if not category_filter:
+                return True
+            return notam["category"] in category_filter
 
         def highlight_search_terms(notam_text: str):
             highlighted = notam_text
@@ -353,10 +364,12 @@ with tab1:
 
         col1, col2 = st.columns(2)
 
+        # --- Canadian Airports ---
         with col1:
             st.subheader("Canadian Airports (CFPS)")
             for airport in cfps_list:
                 with st.expander(airport["ICAO"], expanded=False):
+                    # Runway status
                     runways_status = get_runway_status(airport["ICAO"], airport["notams"])
                     if runways_status:
                         runway_table_html = "<table style='border-collapse: collapse; width:100%; color:#eee;'>"
@@ -368,16 +381,20 @@ with tab1:
                         runway_table_html += "</table>"
                         st.markdown(runway_table_html, unsafe_allow_html=True)
 
+                    # NOTAM display
+                    airport["notams"].sort(key=lambda x: (x["category"], x["sortKey"]))
                     for notam in airport["notams"]:
-                        if matches_filter(notam["text"]):
+                        if matches_filter(notam["text"]) and matches_category(notam):
                             notam_copy = notam.copy()
                             notam_copy["text"] = highlight_search_terms(notam_copy["text"])
                             st.markdown(format_notam_card(notam_copy), unsafe_allow_html=True)
 
+        # --- US Airports ---
         with col2:
             st.subheader("US Airports (FAA)")
             for airport in faa_list:
                 with st.expander(airport["ICAO"], expanded=False):
+                    # Runway status
                     runways_status = get_runway_status(airport["ICAO"], airport["notams"])
                     if runways_status:
                         runway_table_html = "<table style='border-collapse: collapse; width:100%; color:#eee;'>"
@@ -389,13 +406,15 @@ with tab1:
                         runway_table_html += "</table>"
                         st.markdown(runway_table_html, unsafe_allow_html=True)
 
+                    # NOTAM display
+                    airport["notams"].sort(key=lambda x: (x["category"], x["sortKey"]))
                     for notam in airport["notams"]:
-                        if matches_filter(notam["text"]):
+                        if matches_filter(notam["text"]) and matches_category(notam):
                             notam_copy = notam.copy()
                             notam_copy["text"] = highlight_search_terms(notam_copy["text"])
                             st.markdown(format_notam_card(notam_copy), unsafe_allow_html=True)
 
-        # Download Excel
+        # --- Excel download ---
         all_results = []
         for airport in cfps_list + faa_list:
             for notam in airport["notams"]:
@@ -403,7 +422,8 @@ with tab1:
                     "ICAO": airport["ICAO"],
                     "NOTAM": notam["text"],
                     "Effective": notam["effectiveStart"],
-                    "Expires": notam["effectiveEnd"]
+                    "Expires": notam["effectiveEnd"],
+                    "Category": notam["category"]
                 })
         df_results = pd.DataFrame(all_results)
         towrite = BytesIO()
@@ -462,6 +482,7 @@ with tab2:
 
         except Exception as e:
             st.error(f"FAA fetch failed for {debug_icao}: {e}")
+
 
 
 
