@@ -204,8 +204,13 @@ def get_faa_notams(icao: str):
     return notams
 
 def format_notam_card(notam):
-    highlighted_text = highlight_keywords(notam["text"])
     category_color = CATEGORY_COLORS.get(notam["category"], "#ccc")
+
+    # Strip leading spaces on each line to align flush left
+    lines = notam["text"].splitlines()
+    cleaned_text = "\n".join(line.lstrip() for line in lines)
+
+    highlighted_text = highlight_keywords(cleaned_text)
 
     if notam["start_dt"] and notam["end_dt"]:
         delta = notam["end_dt"] - notam["start_dt"]
@@ -230,7 +235,7 @@ def format_notam_card(notam):
     card_html = f"""
     <div style='border:2px solid {category_color}; padding:10px; margin-bottom:8px; 
                 background-color:#111; color:#eee; border-radius:5px;'>
-        <p style='margin:0; padding:0; font-family:monospace; white-space:pre-wrap;'>
+        <p style='margin:0; padding:0; font-family:monospace;'>
             <strong>[{notam['category']}]</strong>
         </p>
         <p style='margin:0; padding:0; font-family:monospace; white-space:pre-wrap;'>
@@ -488,5 +493,6 @@ with tab2:
 
         except Exception as e:
             st.error(f"FAA fetch failed for {debug_icao}: {e}")
+
 
 
