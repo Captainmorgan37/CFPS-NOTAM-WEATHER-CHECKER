@@ -203,6 +203,7 @@ def get_faa_notams(icao: str):
     notams = deduplicate_notams(notams)
     return notams
 
+
 def format_notam_card(notam):
     highlighted_text = highlight_keywords(notam["text"])
     category_color = CATEGORY_COLORS.get(notam["category"], "#ccc")
@@ -227,8 +228,11 @@ def format_notam_card(notam):
     else:
         remaining_str = ""
 
+    # Highlight PPR category more prominently
+    border_style = f"3px solid {category_color}" if notam["category"] in ["Runway", "PPR"] else "1px solid #ccc"
+
     card_html = f"""
-    <div style='border:1px solid #ccc; padding:10px; margin-bottom:8px; background-color:#111; color:#eee; border-radius:5px;'>
+    <div style='border:{border_style}; padding:10px; margin-bottom:8px; background-color:#111; color:#eee; border-radius:5px;'>
         <p style='margin:0; font-family:monospace;'><strong style="color:{category_color}">[{notam['category']}]</strong></p>
         <p style='margin:0; font-family:monospace; white-space:pre-wrap;'>{highlighted_text}</p>
         <table style='margin-top:5px; font-size:0.9em; color:#aaa; width:100%;'>
@@ -473,3 +477,4 @@ with tab2:
 
         except Exception as e:
             st.error(f"FAA fetch failed for {debug_icao}: {e}")
+
