@@ -24,6 +24,14 @@ def load_runway_data():
 runways_df = load_runway_data()
 
 # ----- FUNCTIONS -----
+CATEGORY_COLORS = {
+    "Runway": "#ff6666",           # red-ish
+    "Taxiway/Apron": "#ffa500",    # orange
+    "Airspace/Navigation": "#66b3ff",  # blue
+    "Obstacle/Lighting": "#ffff66",    # yellow
+    "Other": "#cccccc"             # gray
+}
+
 def highlight_keywords(notam_text: str):
     for kw in KEYWORDS:
         notam_text = notam_text.replace(
@@ -219,17 +227,20 @@ def format_notam_card(notam):
     else:
         remaining_str = ""
 
+    category_color = CATEGORY_COLORS.get(notam["category"], "#ccc")
+    
     card_html = f"""
-    <div style='border:1px solid #ccc; padding:10px; margin-bottom:8px; background-color:#111; color:#eee; border-radius:5px;'>
+    <div style='border:1px solid {category_color}; padding:10px; margin-bottom:8px; background-color:#111; color:#eee; border-radius:5px;'>
         <p style='margin:0; font-family:monospace; white-space:pre-wrap;'>{highlighted_text}</p>
         <table style='margin-top:5px; font-size:0.9em; color:#aaa; width:100%;'>
             <tr><td><strong>Effective:</strong></td><td>{notam['effectiveStart']}</td><td>{remaining_str}</td></tr>
             <tr><td><strong>Expires:</strong></td><td>{notam['effectiveEnd']}</td></tr>
             <tr><td><strong>Duration:</strong></td><td>{duration_str}</td></tr>
-            <tr><td><strong>Category:</strong></td><td>{notam['category']}</td></tr>
+            <tr><td><strong>Category:</strong></td><td style='color:{category_color}'>{notam['category']}</td></tr>
         </table>
     </div>
     """
+
     return card_html
 
 # ----- DEDUPLICATION -----
@@ -477,4 +488,5 @@ with tab2:
 
         except Exception as e:
             st.error(f"FAA fetch failed for {debug_icao}: {e}")
+
 
