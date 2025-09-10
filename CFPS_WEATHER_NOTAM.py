@@ -9,9 +9,17 @@ from datetime import datetime, timedelta
 # ----- CONFIG -----
 FAA_CLIENT_ID = st.secrets["FAA_CLIENT_ID"]
 FAA_CLIENT_SECRET = st.secrets["FAA_CLIENT_SECRET"]
-KEYWORDS = ["CLOSED", "CLSD"]
-HIDE_KEYWORDS = ["crane", "RUSSIAN", "CONGO", "OBST RIG", "CANCELLED", "CANCELED", 
-                 "SAFETY AREA NOT STD", "GRASS CUTTING", "OBST TOWER"]
+KEYWORDS = ["CLOSED", "CLSD"]  # Add any more keywords here
+HIDE_KEYWORDS = ["crane", "RUSSIAN", "CONGO", "OBST RIG", "CANCELLED", "CANCELED",
+                 "SAFETY AREA NOT STD", "GRASS CUTTING", "OBST TOWER"]  # Words to ignore
+
+CATEGORY_COLORS = {
+    "Runway": "#f44336",            # red
+    "Taxiway/Apron": "#ff9800",     # orange
+    "Airspace/Navigation": "#2196f3",  # blue
+    "Obstacle/Lighting": "#9c27b0",    # purple
+    "Other": "#9e9e9e"              # gray
+}
 
 st.set_page_config(page_title="CFPS/FAA NOTAM Viewer", layout="wide")
 st.title("CFPS & FAA NOTAM Viewer")
@@ -48,15 +56,15 @@ def parse_cfps_times(notam_text):
     end, end_dt = format_time(end_match.group(1)) if end_match else ('N/A', None)
     return start, end, start_dt, end_dt
 
-def categorize_notam(text: str) -> str:
+def categorize_notam(text: str):
     text_upper = text.upper()
-    if any(kw in text_upper for kw in ["RWY", "RUNWAY"]):
+    if any(rwy_kw in text_upper for rwy_kw in ["RWY", "RUNWAY"]):
         return "Runway"
-    elif any(kw in text_upper for kw in ["TWY", "APRON", "TAXIWAY"]):
+    elif any(twy_kw in text_upper for twy_kw in ["TWY", "APR", "APRON"]):
         return "Taxiway/Apron"
-    elif any(kw in text_upper for kw in ["AIRSPACE", "VOR", "NAV", "NAVAID", "RADAR"]):
+    elif any(airspace_kw in text_upper for airspace_kw in ["AIRSPACE", "NAV", "NAVAID", "VOR", "ILS"]):
         return "Airspace/Navigation"
-    elif any(kw in text_upper for kw in ["OBST", "LIGHT", "TOWER"]):
+    elif any(obs_kw in text_upper for obs_kw in ["OBST", "TOWER", "LIGHT"]):
         return "Obstacle/Lighting"
     else:
         return "Other"
@@ -99,14 +107,15 @@ def get_cfps_notams(icao: str):
 
             notams.append({
                 "text": notam_text,
+                "category": categorize_notam(notam_text),
                 "effectiveStart": effective_start,
                 "effectiveEnd": effective_end,
                 "start_dt": start_dt,
                 "end_dt": end_dt,
-                "sortKey": sort_key,
-                "category": categorize_notam(notam_text)
+                "sortKey": sort_key
             })
 
+    # Sort by category and date
     notams.sort(key=lambda x: (x["category"], x["sortKey"]))
     return notams
 
@@ -181,106 +190,23 @@ def get_faa_notams(icao: str):
 
         notams.append({
             "text": text_to_use,
+            "category": categorize_notam(text_to_use),
             "effectiveStart": effective_display,
             "effectiveEnd": expiry_display,
             "start_dt": start_dt,
             "end_dt": end_dt,
-            "sortKey": start_dt if start_dt else datetime.min,
-            "category": categorize_notam(text_to_use)
+            "sortKey": start_dt if start_dt else datetime.min
         })
 
+    # Sort by category and date
     notams.sort(key=lambda x: (x["category"], x["sortKey"]))
     notams = deduplicate_notams(notams)
     return notams
 
-# ----- FETCH FAA NOTAMS -----
-def get_faa_notams(icao: str):
-    url = "https://external-api.faa.gov/notamapi/v1/notams"
-    headers = {
-        "client_id": FAA_CLIENT_ID,
-        "client_secret": FAA_CLIENT_SECRET
-    }
-    params = {
-        "icaoLocation": icao.upper(),
-        "responseFormat": "geoJson",
-        "pageSize": 200
-    }
-
-    all_items = []
-    page_cursor = None
-
-    while True:
-        if page_cursor:
-            params["pageCursor"] = page_cursor
-
-        response = requests.get(url, headers=headers, params=params)
-        response.raise_for_status()
-        data = response.json()
-        items = data.get("items", [])
-        all_items.extend(items)
-        page_cursor = data.get("nextPageCursor")
-        if not page_cursor:
-            break
-
-    notams = []
-
-    for feature in all_items:
-        props = feature.get("properties", {})
-        core = props.get("coreNOTAMData", {})
-        notam_data = core.get("notam", {})
-
-        notam_text = notam_data.get("text", "")
-        translations = core.get("notamTranslation", [])
-        simple_text = None
-        for t in translations:
-            if t.get("type") == "LOCAL_FORMAT":
-                simple_text = t.get("simpleText")
-        text_to_use = simple_text if simple_text else notam_text
-
-        # Skip ICAO-format NOTAMs (keep only LOCAL_FORMAT / domestic)
-        if not simple_text:
-            continue
-
-        if any(hide_kw.lower() in text_to_use.lower() for hide_kw in HIDE_KEYWORDS):
-            continue
-
-        effective = notam_data.get("effectiveStart", None)
-        expiry = notam_data.get("effectiveEnd", None)
-
-        start_dt = end_dt = None
-        if effective == "PERM":
-            effective_display = "PERM"
-        elif effective:
-            start_dt = datetime.fromisoformat(effective.replace("Z", ""))
-            effective_display = start_dt.strftime("%b %d %Y, %H:%M")
-        else:
-            effective_display = "N/A"
-
-        if expiry == "PERM":
-            expiry_display = "PERM"
-        elif expiry:
-            end_dt = datetime.fromisoformat(expiry.replace("Z", ""))
-            expiry_display = end_dt.strftime("%b %d %Y, %H:%M")
-        else:
-            expiry_display = "N/A"
-
-        notams.append({
-            "text": text_to_use,
-            "effectiveStart": effective_display,
-            "effectiveEnd": expiry_display,
-            "start_dt": start_dt,
-            "end_dt": end_dt,
-            "sortKey": start_dt if start_dt else datetime.min,
-            "category": categorize_notam(text_to_use)
-        })
-
-    notams.sort(key=lambda x: (x["category"], x["sortKey"]))
-    notams = deduplicate_notams(notams)
-    return notams
-
-# ----- NOTAM CARD -----
 def format_notam_card(notam):
     highlighted_text = highlight_keywords(notam["text"])
+    category_color = CATEGORY_COLORS.get(notam["category"], "#ccc")
+
     if notam["start_dt"] and notam["end_dt"]:
         delta = notam["end_dt"] - notam["start_dt"]
         hours, remainder = divmod(delta.total_seconds(), 3600)
@@ -301,20 +227,19 @@ def format_notam_card(notam):
     else:
         remaining_str = ""
 
-    category_color = CATEGORY_COLORS.get(notam["category"], "#ccc")
-    
     card_html = f"""
-    <div style='border:1px solid {category_color}; padding:10px; margin-bottom:8px; background-color:#111; color:#eee; border-radius:5px;'>
-        <p style='margin:0; font-family:monospace; white-space:pre-wrap;'>{highlighted_text}</p>
+    <div style='border:2px solid {category_color}; padding:10px; margin-bottom:8px; 
+                background-color:#111; color:#eee; border-radius:5px;'>
+        <p style='margin:0; font-family:monospace; white-space:pre-wrap;'>
+            <strong>[{notam['category']}]</strong> {highlighted_text}
+        </p>
         <table style='margin-top:5px; font-size:0.9em; color:#aaa; width:100%;'>
             <tr><td><strong>Effective:</strong></td><td>{notam['effectiveStart']}</td><td>{remaining_str}</td></tr>
             <tr><td><strong>Expires:</strong></td><td>{notam['effectiveEnd']}</td></tr>
             <tr><td><strong>Duration:</strong></td><td>{duration_str}</td></tr>
-            <tr><td><strong>Category:</strong></td><td style='color:{category_color}'>{notam['category']}</td></tr>
         </table>
     </div>
     """
-
     return card_html
 
 # ----- DEDUPLICATION -----
@@ -357,7 +282,7 @@ def normalize_surface(surface):
     elif any(c in s for c in ["CON", "CONC", "CONCRETE"]):
         return "Concrete", True
     else:
-        return s.title(), False  # unusable
+        return s.title(), False
 
 def get_runway_status(icao: str, airport_notams: list):
     airport_runways = runways_df[runways_df['airport_ident'] == icao.upper()]
@@ -428,7 +353,6 @@ with tab1:
             except Exception as e:
                 st.warning(f"Failed to fetch data for {icao}: {e}")
 
-        # Filter input
         filter_input = st.text_input("Filter NOTAMs by keywords (comma-separated):").strip().lower()
         filter_terms = [t.strip() for t in filter_input.split(",") if t.strip()]
 
@@ -453,7 +377,6 @@ with tab1:
         with col1:
             st.subheader("Canadian Airports (CFPS)")
             for airport in cfps_list:
-                airport["notams"].sort(key=lambda x: (x["category"], x["sortKey"]))
                 with st.expander(airport["ICAO"], expanded=False):
                     runways_status = get_runway_status(airport["ICAO"], airport["notams"])
                     if runways_status:
@@ -475,7 +398,6 @@ with tab1:
         with col2:
             st.subheader("US Airports (FAA)")
             for airport in faa_list:
-                airport["notams"].sort(key=lambda x: (x["category"], x["sortKey"]))
                 with st.expander(airport["ICAO"], expanded=False):
                     runways_status = get_runway_status(airport["ICAO"], airport["notams"])
                     if runways_status:
@@ -500,8 +422,8 @@ with tab1:
             for notam in airport["notams"]:
                 all_results.append({
                     "ICAO": airport["ICAO"],
-                    "NOTAM": notam["text"],
                     "Category": notam["category"],
+                    "NOTAM": notam["text"],
                     "Effective": notam["effectiveStart"],
                     "Expires": notam["effectiveEnd"]
                 })
@@ -562,4 +484,3 @@ with tab2:
 
         except Exception as e:
             st.error(f"FAA fetch failed for {debug_icao}: {e}")
-
