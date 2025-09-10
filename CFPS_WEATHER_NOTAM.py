@@ -171,7 +171,9 @@ def get_faa_notams(icao: str):
         })
 
     notams.sort(key=lambda x: x["sortKey"], reverse=True)
+    notams = deduplicate_notams(notams)   # <<< add this line
     return notams
+
 
 def format_notam_card(notam):
     highlighted_text = highlight_keywords(notam["text"])
@@ -206,6 +208,30 @@ def format_notam_card(notam):
     </div>
     """
     return card_html
+
+def normalize_for_dedup(raw_text: str) -> str:
+    """Normalize NOTAM text for deduplication."""
+    text = raw_text.lstrip("!").strip()
+    # Remove NOTAM numbers like "09/009"
+    text = re.sub(r"\b\d{2}/\d{3}\b", "", text)
+    text = re.sub(r"\s+", " ", text)  # collapse spaces
+    return text.strip()
+
+def deduplicate_notams(notams):
+    """Deduplicate NOTAMs, keeping the most detailed version."""
+    grouped = {}
+    for n in notams:
+        norm_text = normalize_for_dedup(n["text"])
+        key = (norm_text, n["effectiveStart"], n["effectiveEnd"])
+        if key not in grouped:
+            grouped[key] = n
+        else:
+            existing = grouped[key]
+            # Keep the more detailed version (longer text length)
+            if len(n["text"]) > len(existing["text"]):
+                grouped[key] = n
+    return list(grouped.values())
+
 
 # ----- RUNWAY STATUS -----
 def is_runway_closed(notam_text, runway_name):
@@ -429,3 +455,4 @@ with tab2:
 
         except Exception as e:
             st.error(f"FAA fetch failed for {debug_icao}: {e}")
+
