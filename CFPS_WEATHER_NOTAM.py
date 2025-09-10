@@ -206,12 +206,12 @@ def get_faa_notams(icao: str):
 def format_notam_card(notam):
     category_color = CATEGORY_COLORS.get(notam["category"], "#ccc")
 
-    # Strip leading spaces on each line to align flush left
+    # Clean leading spaces per line
     lines = notam["text"].splitlines()
     cleaned_text = "\n".join(line.lstrip() for line in lines)
-
     highlighted_text = highlight_keywords(cleaned_text)
 
+    # Duration calculation
     if notam["start_dt"] and notam["end_dt"]:
         delta = notam["end_dt"] - notam["start_dt"]
         hours, remainder = divmod(delta.total_seconds(), 3600)
@@ -220,6 +220,7 @@ def format_notam_card(notam):
     else:
         duration_str = "N/A"
 
+    # Remaining time
     now = datetime.utcnow()
     if notam["end_dt"]:
         remaining_delta = notam["end_dt"] - now
@@ -232,15 +233,12 @@ def format_notam_card(notam):
     else:
         remaining_str = ""
 
+    # Card HTML
     card_html = f"""
     <div style='border:2px solid {category_color}; padding:10px; margin-bottom:8px; 
-                background-color:#111; color:#eee; border-radius:5px;'>
-        <p style='margin:0; padding:0; font-family:monospace;'>
-            <strong>[{notam['category']}]</strong>
-        </p>
-        <p style='margin:0; padding:0; font-family:monospace; white-space:pre-wrap;'>
-            {highlighted_text}
-        </p>
+                background-color:#111; color:#eee; border-radius:5px; font-family:monospace;'>
+        <div style='margin:0; padding:0;'><strong>[{notam['category']}]</strong></div>
+        <pre style='margin:0; padding:0; white-space:pre-wrap;'>{highlighted_text}</pre>
         <table style='margin-top:5px; font-size:0.9em; color:#aaa; width:100%;'>
             <tr><td><strong>Effective:</strong></td><td>{notam['effectiveStart']}</td><td>{remaining_str}</td></tr>
             <tr><td><strong>Expires:</strong></td><td>{notam['effectiveEnd']}</td></tr>
@@ -249,6 +247,7 @@ def format_notam_card(notam):
     </div>
     """
     return card_html
+
 
 
 # ----- DEDUPLICATION -----
@@ -493,6 +492,7 @@ with tab2:
 
         except Exception as e:
             st.error(f"FAA fetch failed for {debug_icao}: {e}")
+
 
 
 
