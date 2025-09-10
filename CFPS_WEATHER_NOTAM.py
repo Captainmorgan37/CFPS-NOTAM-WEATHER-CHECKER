@@ -138,6 +138,11 @@ def get_faa_notams(icao: str):
                 simple_text = t.get("simpleText")
         text_to_use = simple_text if simple_text else notam_text
 
+        # ✅ Only keep domestic NOTAMs starting with "!"
+        if not notam_text.strip().startswith("!"):
+            continue
+
+        # ✅ Existing keyword filter
         if any(hide_kw.lower() in text_to_use.lower() for hide_kw in HIDE_KEYWORDS):
             continue
 
@@ -171,8 +176,9 @@ def get_faa_notams(icao: str):
         })
 
     notams.sort(key=lambda x: x["sortKey"], reverse=True)
-    notams = deduplicate_notams(notams)   # <<< add this line
+    notams = deduplicate_notams(notams)   # keep if you still want de-dupe
     return notams
+
 
 
 def format_notam_card(notam):
@@ -455,4 +461,5 @@ with tab2:
 
         except Exception as e:
             st.error(f"FAA fetch failed for {debug_icao}: {e}")
+
 
