@@ -138,9 +138,10 @@ def get_faa_notams(icao: str):
                 simple_text = t.get("simpleText")
         text_to_use = simple_text if simple_text else notam_text
 
-        # ✅ Only keep domestic NOTAMs starting with "!"
-        if not notam_text.strip().startswith("!"):
+        # ✅ Skip ICAO-format NOTAMs (keep only LOCAL_FORMAT / domestic)
+        if not simple_text:
             continue
+
 
         # ✅ Existing keyword filter
         if any(hide_kw.lower() in text_to_use.lower() for hide_kw in HIDE_KEYWORDS):
@@ -461,5 +462,6 @@ with tab2:
 
         except Exception as e:
             st.error(f"FAA fetch failed for {debug_icao}: {e}")
+
 
 
