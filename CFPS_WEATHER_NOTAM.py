@@ -231,7 +231,10 @@ def format_notam_card(notam):
     <div style='border:2px solid {category_color}; padding:10px; margin-bottom:8px; 
                 background-color:#111; color:#eee; border-radius:5px;'>
         <p style='margin:0; font-family:monospace; white-space:pre-wrap;'>
-            <strong>[{notam['category']}]</strong> {highlighted_text}
+            <strong>[{notam['category']}]</strong>
+        </p>
+        <p style='margin:5px 0 0 0; font-family:monospace; white-space:pre-wrap;'>
+            {highlighted_text}
         </p>
         <table style='margin-top:5px; font-size:0.9em; color:#aaa; width:100%;'>
             <tr><td><strong>Effective:</strong></td><td>{notam['effectiveStart']}</td><td>{remaining_str}</td></tr>
@@ -241,6 +244,7 @@ def format_notam_card(notam):
     </div>
     """
     return card_html
+
 
 # ----- DEDUPLICATION -----
 def normalize_for_dedup(raw_text: str) -> str:
@@ -484,3 +488,4 @@ with tab2:
 
         except Exception as e:
             st.error(f"FAA fetch failed for {debug_icao}: {e}")
+
