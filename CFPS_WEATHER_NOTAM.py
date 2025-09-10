@@ -9,8 +9,8 @@ from datetime import datetime, timedelta
 # ----- CONFIG -----
 FAA_CLIENT_ID = st.secrets["FAA_CLIENT_ID"]
 FAA_CLIENT_SECRET = st.secrets["FAA_CLIENT_SECRET"]
-KEYWORDS = ["CLOSED", "CLSD"]  # Add any more keywords here
-HIDE_KEYWORDS = ["crane", "RUSSIAN", "CONGO", "OBST RIG", "CANCELLED", "CANCELED", "SAFETY AREA NOT STD", "GRASS CUTTING", "OBST TOWER"]  # Words to ignore
+KEYWORDS = ["CLOSED", "CLSD"]
+HIDE_KEYWORDS = ["crane", "RUSSIAN", "CONGO", "OBST RIG", "CANCELLED", "CANCELED", "SAFETY AREA NOT STD", "GRASS CUTTING"]
 
 st.set_page_config(page_title="CFPS/FAA NOTAM Viewer", layout="wide")
 st.title("CFPS & FAA NOTAM Viewer")
@@ -47,6 +47,23 @@ def parse_cfps_times(notam_text):
     end, end_dt = format_time(end_match.group(1)) if end_match else ('N/A', None)
     return start, end, start_dt, end_dt
 
+# ----- NOTAM CATEGORIZATION -----
+def categorize_notam(text: str) -> str:
+    text_upper = text.upper()
+    if any(kw in text_upper for kw in ["RWY", "TWY"]):
+        return "Runway/Taxiway"
+    elif any(kw in text_upper for kw in ["VOR", "NDB", "ILS", "NAVAID", "NAV"]):
+        return "Navigation/NAVAID"
+    elif any(kw in text_upper for kw in ["CTR", "TFR", "AIRSPACE", "RESTRICT"]):
+        return "Airspace/Restrictions"
+    elif any(kw in text_upper for kw in ["APRON", "FUEL", "SERVICE", "FACILITY"]):
+        return "Airport Services"
+    elif any(kw in text_upper for kw in ["ICE", "WIND", "SNOW", "WEATHER", "HAZARD"]):
+        return "Weather/Hazards"
+    else:
+        return "Misc/Other"
+
+# ----- CFPS NOTAMS -----
 def get_cfps_notams(icao: str):
     url = "https://plan.navcanada.ca/weather/api/alpha/"
     params = {
@@ -89,12 +106,14 @@ def get_cfps_notams(icao: str):
                 "effectiveEnd": effective_end,
                 "start_dt": start_dt,
                 "end_dt": end_dt,
-                "sortKey": sort_key
+                "sortKey": sort_key,
+                "category": categorize_notam(notam_text)
             })
 
-    notams.sort(key=lambda x: x["sortKey"], reverse=True)
+    notams.sort(key=lambda x: (x["category"], x["sortKey"]))
     return notams
 
+# ----- FAA NOTAMS -----
 def get_faa_notams(icao: str):
     url = "https://external-api.faa.gov/notamapi/v1/notams"
     headers = {
@@ -138,12 +157,10 @@ def get_faa_notams(icao: str):
                 simple_text = t.get("simpleText")
         text_to_use = simple_text if simple_text else notam_text
 
-        # ✅ Skip ICAO-format NOTAMs (keep only LOCAL_FORMAT / domestic)
-        if not simple_text:
+        # Only keep domestic NOTAMs starting with "!"
+        if not notam_text.strip().startswith("!"):
             continue
 
-
-        # ✅ Existing keyword filter
         if any(hide_kw.lower() in text_to_use.lower() for hide_kw in HIDE_KEYWORDS):
             continue
 
@@ -173,15 +190,31 @@ def get_faa_notams(icao: str):
             "effectiveEnd": expiry_display,
             "start_dt": start_dt,
             "end_dt": end_dt,
-            "sortKey": start_dt if start_dt else datetime.min
+            "sortKey": start_dt if start_dt else datetime.min,
+            "category": categorize_notam(text_to_use)
         })
 
-    notams.sort(key=lambda x: x["sortKey"], reverse=True)
-    notams = deduplicate_notams(notams)   # keep if you still want de-dupe
+    notams.sort(key=lambda x: (x["category"], x["sortKey"]))
+    notams = deduplicate_notams(notams)
     return notams
 
+# ----- DEDUPE -----
+def normalize_for_dedup(raw_text: str) -> str:
+    text = raw_text.lstrip("!").strip()
+    text = re.sub(r"\b\d{2}/\d{3}\b", "", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
 
+def deduplicate_notams(notams):
+    grouped = {}
+    for n in notams:
+        norm_text = normalize_for_dedup(n["text"])
+        key = (norm_text, n["effectiveStart"], n["effectiveEnd"])
+        if key not in grouped or len(n["text"]) > len(grouped[key]["text"]):
+            grouped[key] = n
+    return list(grouped.values())
 
+# ----- FORMAT NOTAM CARD -----
 def format_notam_card(notam):
     highlighted_text = highlight_keywords(notam["text"])
     if notam["start_dt"] and notam["end_dt"]:
@@ -211,34 +244,11 @@ def format_notam_card(notam):
             <tr><td><strong>Effective:</strong></td><td>{notam['effectiveStart']}</td><td>{remaining_str}</td></tr>
             <tr><td><strong>Expires:</strong></td><td>{notam['effectiveEnd']}</td></tr>
             <tr><td><strong>Duration:</strong></td><td>{duration_str}</td></tr>
+            <tr><td><strong>Category:</strong></td><td>{notam['category']}</td></tr>
         </table>
     </div>
     """
     return card_html
-
-def normalize_for_dedup(raw_text: str) -> str:
-    """Normalize NOTAM text for deduplication."""
-    text = raw_text.lstrip("!").strip()
-    # Remove NOTAM numbers like "09/009"
-    text = re.sub(r"\b\d{2}/\d{3}\b", "", text)
-    text = re.sub(r"\s+", " ", text)  # collapse spaces
-    return text.strip()
-
-def deduplicate_notams(notams):
-    """Deduplicate NOTAMs, keeping the most detailed version."""
-    grouped = {}
-    for n in notams:
-        norm_text = normalize_for_dedup(n["text"])
-        key = (norm_text, n["effectiveStart"], n["effectiveEnd"])
-        if key not in grouped:
-            grouped[key] = n
-        else:
-            existing = grouped[key]
-            # Keep the more detailed version (longer text length)
-            if len(n["text"]) > len(existing["text"]):
-                grouped[key] = n
-    return list(grouped.values())
-
 
 # ----- RUNWAY STATUS -----
 def is_runway_closed(notam_text, runway_name):
@@ -331,25 +341,14 @@ with tab1:
             except Exception as e:
                 st.warning(f"Failed to fetch data for {icao}: {e}")
 
-        # --- Filter inputs ---
+        # Filter input
         filter_input = st.text_input("Filter NOTAMs by keywords (comma-separated):").strip().lower()
         filter_terms = [t.strip() for t in filter_input.split(",") if t.strip()]
-
-        category_filter = st.multiselect(
-            "Filter by NOTAM category",
-            ["Runway/Taxiway", "Navigation/NAVAID", "Airspace/Restrictions", "Airport Services", "Weather/Hazards", "Misc/Other"],
-            default=[]
-        )
 
         def matches_filter(text: str):
             if not filter_terms:
                 return True
             return any(term in text.lower() for term in filter_terms)
-
-        def matches_category(notam):
-            if not category_filter:
-                return True
-            return notam["category"] in category_filter
 
         def highlight_search_terms(notam_text: str):
             highlighted = notam_text
@@ -364,12 +363,11 @@ with tab1:
 
         col1, col2 = st.columns(2)
 
-        # --- Canadian Airports ---
+        # ----- Canadian Airports -----
         with col1:
             st.subheader("Canadian Airports (CFPS)")
             for airport in cfps_list:
                 with st.expander(airport["ICAO"], expanded=False):
-                    # Runway status
                     runways_status = get_runway_status(airport["ICAO"], airport["notams"])
                     if runways_status:
                         runway_table_html = "<table style='border-collapse: collapse; width:100%; color:#eee;'>"
@@ -381,20 +379,21 @@ with tab1:
                         runway_table_html += "</table>"
                         st.markdown(runway_table_html, unsafe_allow_html=True)
 
-                    # NOTAM display
-                    airport["notams"].sort(key=lambda x: (x["category"], x["sortKey"]))
-                    for notam in airport["notams"]:
-                        if matches_filter(notam["text"]) and matches_category(notam):
-                            notam_copy = notam.copy()
-                            notam_copy["text"] = highlight_search_terms(notam_copy["text"])
-                            st.markdown(format_notam_card(notam_copy), unsafe_allow_html=True)
+                    # Group by category
+                    categories = sorted(set(n["category"] for n in airport["notams"]))
+                    for cat in categories:
+                        st.markdown(f"### {cat}")
+                        for notam in [n for n in airport["notams"] if n["category"] == cat]:
+                            if matches_filter(notam["text"]):
+                                notam_copy = notam.copy()
+                                notam_copy["text"] = highlight_search_terms(notam_copy["text"])
+                                st.markdown(format_notam_card(notam_copy), unsafe_allow_html=True)
 
-        # --- US Airports ---
+        # ----- US Airports -----
         with col2:
             st.subheader("US Airports (FAA)")
             for airport in faa_list:
                 with st.expander(airport["ICAO"], expanded=False):
-                    # Runway status
                     runways_status = get_runway_status(airport["ICAO"], airport["notams"])
                     if runways_status:
                         runway_table_html = "<table style='border-collapse: collapse; width:100%; color:#eee;'>"
@@ -406,15 +405,17 @@ with tab1:
                         runway_table_html += "</table>"
                         st.markdown(runway_table_html, unsafe_allow_html=True)
 
-                    # NOTAM display
-                    airport["notams"].sort(key=lambda x: (x["category"], x["sortKey"]))
-                    for notam in airport["notams"]:
-                        if matches_filter(notam["text"]) and matches_category(notam):
-                            notam_copy = notam.copy()
-                            notam_copy["text"] = highlight_search_terms(notam_copy["text"])
-                            st.markdown(format_notam_card(notam_copy), unsafe_allow_html=True)
+                    # Group by category
+                    categories = sorted(set(n["category"] for n in airport["notams"]))
+                    for cat in categories:
+                        st.markdown(f"### {cat}")
+                        for notam in [n for n in airport["notams"] if n["category"] == cat]:
+                            if matches_filter(notam["text"]):
+                                notam_copy = notam.copy()
+                                notam_copy["text"] = highlight_search_terms(notam_copy["text"])
+                                st.markdown(format_notam_card(notam_copy), unsafe_allow_html=True)
 
-        # --- Excel download ---
+        # Download Excel
         all_results = []
         for airport in cfps_list + faa_list:
             for notam in airport["notams"]:
@@ -482,9 +483,3 @@ with tab2:
 
         except Exception as e:
             st.error(f"FAA fetch failed for {debug_icao}: {e}")
-
-
-
-
-
-
