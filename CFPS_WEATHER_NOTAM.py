@@ -47,6 +47,21 @@ def parse_cfps_times(notam_text):
     end, end_dt = format_time(end_match.group(1)) if end_match else ('N/A', None)
     return start, end, start_dt, end_dt
 
+# ----- NOTAM CATEGORY -----
+def categorize_notam(notam_text: str) -> str:
+    text = notam_text.upper()
+    if "RWY" in text:
+        return "Runway"
+    elif any(k in text for k in ["TWY", "APRON"]):
+        return "Taxiway/Apron"
+    elif any(k in text for k in ["AIRSPACE", "NAV", "NDB", "VOR", "ILS", "GPS"]):
+        return "Airspace/Navigation"
+    elif any(k in text for k in ["OBST", "TOWER", "LIGHT"]):
+        return "Obstacle/Lighting"
+    else:
+        return "Other"
+
+# ----- FETCH CFPS NOTAMS -----
 def get_cfps_notams(icao: str):
     url = "https://plan.navcanada.ca/weather/api/alpha/"
     params = {
@@ -89,12 +104,14 @@ def get_cfps_notams(icao: str):
                 "effectiveEnd": effective_end,
                 "start_dt": start_dt,
                 "end_dt": end_dt,
-                "sortKey": sort_key
+                "sortKey": sort_key,
+                "category": categorize_notam(notam_text)
             })
 
-    notams.sort(key=lambda x: x["sortKey"], reverse=True)
+    notams.sort(key=lambda x: (x["category"], x["sortKey"]), reverse=False)
     return notams
 
+# ----- FETCH FAA NOTAMS -----
 def get_faa_notams(icao: str):
     url = "https://external-api.faa.gov/notamapi/v1/notams"
     headers = {
@@ -138,12 +155,10 @@ def get_faa_notams(icao: str):
                 simple_text = t.get("simpleText")
         text_to_use = simple_text if simple_text else notam_text
 
-        # ✅ Skip ICAO-format NOTAMs (keep only LOCAL_FORMAT / domestic)
+        # Skip ICAO-format NOTAMs (keep only LOCAL_FORMAT / domestic)
         if not simple_text:
             continue
 
-
-        # ✅ Existing keyword filter
         if any(hide_kw.lower() in text_to_use.lower() for hide_kw in HIDE_KEYWORDS):
             continue
 
@@ -173,15 +188,15 @@ def get_faa_notams(icao: str):
             "effectiveEnd": expiry_display,
             "start_dt": start_dt,
             "end_dt": end_dt,
-            "sortKey": start_dt if start_dt else datetime.min
+            "sortKey": start_dt if start_dt else datetime.min,
+            "category": categorize_notam(text_to_use)
         })
 
-    notams.sort(key=lambda x: x["sortKey"], reverse=True)
-    notams = deduplicate_notams(notams)   # keep if you still want de-dupe
+    notams.sort(key=lambda x: (x["category"], x["sortKey"]))
+    notams = deduplicate_notams(notams)
     return notams
 
-
-
+# ----- NOTAM CARD -----
 def format_notam_card(notam):
     highlighted_text = highlight_keywords(notam["text"])
     if notam["start_dt"] and notam["end_dt"]:
@@ -211,21 +226,20 @@ def format_notam_card(notam):
             <tr><td><strong>Effective:</strong></td><td>{notam['effectiveStart']}</td><td>{remaining_str}</td></tr>
             <tr><td><strong>Expires:</strong></td><td>{notam['effectiveEnd']}</td></tr>
             <tr><td><strong>Duration:</strong></td><td>{duration_str}</td></tr>
+            <tr><td><strong>Category:</strong></td><td>{notam['category']}</td></tr>
         </table>
     </div>
     """
     return card_html
 
+# ----- DEDUPLICATION -----
 def normalize_for_dedup(raw_text: str) -> str:
-    """Normalize NOTAM text for deduplication."""
     text = raw_text.lstrip("!").strip()
-    # Remove NOTAM numbers like "09/009"
     text = re.sub(r"\b\d{2}/\d{3}\b", "", text)
-    text = re.sub(r"\s+", " ", text)  # collapse spaces
+    text = re.sub(r"\s+", " ", text)
     return text.strip()
 
 def deduplicate_notams(notams):
-    """Deduplicate NOTAMs, keeping the most detailed version."""
     grouped = {}
     for n in notams:
         norm_text = normalize_for_dedup(n["text"])
@@ -234,11 +248,9 @@ def deduplicate_notams(notams):
             grouped[key] = n
         else:
             existing = grouped[key]
-            # Keep the more detailed version (longer text length)
             if len(n["text"]) > len(existing["text"]):
                 grouped[key] = n
     return list(grouped.values())
-
 
 # ----- RUNWAY STATUS -----
 def is_runway_closed(notam_text, runway_name):
@@ -356,6 +368,7 @@ with tab1:
         with col1:
             st.subheader("Canadian Airports (CFPS)")
             for airport in cfps_list:
+                airport["notams"].sort(key=lambda x: (x["category"], x["sortKey"]))
                 with st.expander(airport["ICAO"], expanded=False):
                     runways_status = get_runway_status(airport["ICAO"], airport["notams"])
                     if runways_status:
@@ -377,6 +390,7 @@ with tab1:
         with col2:
             st.subheader("US Airports (FAA)")
             for airport in faa_list:
+                airport["notams"].sort(key=lambda x: (x["category"], x["sortKey"]))
                 with st.expander(airport["ICAO"], expanded=False):
                     runways_status = get_runway_status(airport["ICAO"], airport["notams"])
                     if runways_status:
@@ -402,6 +416,7 @@ with tab1:
                 all_results.append({
                     "ICAO": airport["ICAO"],
                     "NOTAM": notam["text"],
+                    "Category": notam["category"],
                     "Effective": notam["effectiveStart"],
                     "Expires": notam["effectiveEnd"]
                 })
@@ -462,8 +477,3 @@ with tab2:
 
         except Exception as e:
             st.error(f"FAA fetch failed for {debug_icao}: {e}")
-
-
-
-
-
