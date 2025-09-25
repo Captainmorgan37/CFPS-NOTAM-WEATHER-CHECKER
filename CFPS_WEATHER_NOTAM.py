@@ -84,6 +84,42 @@ def _first_non_empty(data_dict: dict, *keys):
     return None
 
 
+def _simplify_detail_value(value):
+    """Return a display-friendly version of a detail value."""
+
+    if isinstance(value, dict):
+        # Prefer representative string fields over raw JSON output.
+        preferred_keys = ("repr", "text", "raw", "string")
+        numeric_keys = ("value", "visibility", "minValue", "maxValue")
+
+        for key in preferred_keys:
+            if key in value:
+                simplified = _simplify_detail_value(value[key])
+                if simplified not in (None, "", []):
+                    return simplified
+
+        for key in numeric_keys:
+            if key in value:
+                simplified = _simplify_detail_value(value[key])
+                if simplified not in (None, "", []):
+                    return simplified
+
+        return json.dumps(value)
+
+    if isinstance(value, (list, tuple)):
+        simplified_items = []
+        for item in value:
+            simplified = _simplify_detail_value(item)
+            if simplified in (None, "", []):
+                continue
+            simplified_items.append(str(simplified))
+        if not simplified_items:
+            return None
+        return ", ".join(simplified_items)
+
+    return value
+
+
 def build_detail_list(data_dict, field_map):
     if not isinstance(data_dict, dict):
         return []
@@ -104,11 +140,10 @@ def build_detail_list(data_dict, field_map):
             if value in (None, "", []):
                 continue
 
-        if isinstance(value, list):
-            value = ", ".join(str(v) for v in value if v not in (None, ""))
-        elif isinstance(value, dict):
-            value = json.dumps(value)
-        details.append((label, value))
+        simplified_value = _simplify_detail_value(value)
+        if simplified_value in (None, "", []):
+            continue
+        details.append((label, simplified_value))
     return details
 
 
