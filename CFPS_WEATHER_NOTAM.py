@@ -3,7 +3,6 @@ import pandas as pd
 import requests
 import json
 import re
-from io import BytesIO
 from datetime import datetime, timedelta
 
 # ----- CONFIG -----
@@ -33,6 +32,53 @@ def load_runway_data():
 runways_df = load_runway_data()
 
 # ----- FUNCTIONS -----
+def format_iso_timestamp(value):
+    if not value:
+        return "N/A", None
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
+        return dt.strftime("%b %d %Y, %H:%MZ"), dt
+    except ValueError:
+        return value, None
+
+
+def build_detail_list(data_dict, field_map):
+    details = []
+    for key, label in field_map:
+        if key not in data_dict:
+            continue
+        value = data_dict.get(key)
+        if value in (None, "", []):
+            continue
+        if isinstance(value, list):
+            value = ", ".join(str(v) for v in value if v not in (None, ""))
+        elif isinstance(value, dict):
+            value = json.dumps(value)
+        details.append((label, value))
+    return details
+
+
+METAR_DETAIL_FIELDS = [
+    ("temp", "Temperature (°C)"),
+    ("dewpoint", "Dewpoint (°C)"),
+    ("windDir", "Wind Dir (°)"),
+    ("windSpeed", "Wind Speed (kt)"),
+    ("windGust", "Wind Gust (kt)"),
+    ("visibility", "Visibility"),
+    ("altimeter", "Altimeter"),
+    ("ceiling", "Ceiling (ft)"),
+]
+
+TAF_FORECAST_FIELDS = [
+    ("changeIndicator", "Change"),
+    ("probability", "Probability"),
+    ("windDir", "Wind Dir (°)"),
+    ("windSpeed", "Wind Speed (kt)"),
+    ("windGust", "Wind Gust (kt)"),
+    ("visibility", "Visibility"),
+    ("vertVisibility", "Vertical Vis (ft)"),
+]
+
 def highlight_keywords(notam_text: str):
     for kw in KEYWORDS:
         notam_text = notam_text.replace(
@@ -204,6 +250,120 @@ def get_faa_notams(icao: str):
     return notams
 
 
+@st.cache_data(ttl=300)
+def get_metar_reports(icao_codes: tuple[str, ...]):
+    if not icao_codes:
+        return {}
+
+    url = "https://aviationweather.gov/api/data/metar"
+    params = {
+        "ids": ",".join(sorted(set(code.upper() for code in icao_codes))),
+        "format": "JSON",
+        "mostRecent": "true",
+        "mostRecentForEachStation": "true",
+        "hours": 3,
+    }
+
+    response = requests.get(url, params=params, timeout=10)
+    response.raise_for_status()
+    data = response.json()
+
+    reports = {}
+    for feature in data.get("features", []):
+        props = feature.get("properties", {})
+        station = (props.get("station") or "").upper()
+        issue_display, issue_dt = format_iso_timestamp(props.get("issueTime"))
+        raw_text = props.get("rawMETAR") or props.get("rawOb") or props.get("rawText") or ""
+        flight_category = props.get("flightCategory")
+        metar_data = props.get("data", {})
+        details = build_detail_list(metar_data, METAR_DETAIL_FIELDS)
+
+        reports.setdefault(station, []).append({
+            "station": station,
+            "raw": raw_text,
+            "issue_time_display": issue_display,
+            "issue_time": issue_dt,
+            "flight_category": flight_category,
+            "details": details,
+        })
+
+    return reports
+
+
+@st.cache_data(ttl=300)
+def get_taf_reports(icao_codes: tuple[str, ...]):
+    if not icao_codes:
+        return {}
+
+    url = "https://aviationweather.gov/api/data/taf"
+    params = {
+        "ids": ",".join(sorted(set(code.upper() for code in icao_codes))),
+        "format": "JSON",
+        "mostRecent": "true",
+    }
+
+    response = requests.get(url, params=params, timeout=10)
+    response.raise_for_status()
+    data = response.json()
+
+    taf_reports = {}
+
+    for feature in data.get("features", []):
+        props = feature.get("properties", {})
+        station = (props.get("station") or "").upper()
+        issue_display, issue_dt = format_iso_timestamp(props.get("issueTime"))
+        valid_from_display, valid_from_dt = format_iso_timestamp(props.get("validTimeFrom"))
+        valid_to_display, valid_to_dt = format_iso_timestamp(props.get("validTimeTo"))
+        raw_text = props.get("rawTAF") or props.get("rawText") or props.get("raw") or ""
+
+        forecast_periods = []
+        for fc in props.get("forecast", []):
+            fc_from_display, fc_from_dt = format_iso_timestamp(fc.get("fcstTimeFrom"))
+            fc_to_display, fc_to_dt = format_iso_timestamp(fc.get("fcstTimeTo"))
+            fc_details = build_detail_list(fc, TAF_FORECAST_FIELDS)
+
+            wx = fc.get("wxString")
+            if wx:
+                if isinstance(wx, list):
+                    wx = ", ".join(str(v) for v in wx if v not in (None, ""))
+                fc_details.append(("Weather", wx))
+
+            clouds = fc.get("clouds")
+            if clouds:
+                cloud_parts = []
+                for cloud in clouds:
+                    cover = cloud.get("cover")
+                    base = cloud.get("base")
+                    if cover and base:
+                        cloud_parts.append(f"{cover} {base}ft")
+                    elif cover:
+                        cloud_parts.append(str(cover))
+                if cloud_parts:
+                    fc_details.append(("Clouds", ", ".join(cloud_parts)))
+
+            forecast_periods.append({
+                "from_display": fc_from_display,
+                "from_time": fc_from_dt,
+                "to_display": fc_to_display,
+                "to_time": fc_to_dt,
+                "details": fc_details,
+            })
+
+        taf_reports.setdefault(station, []).append({
+            "station": station,
+            "raw": raw_text,
+            "issue_time_display": issue_display,
+            "issue_time": issue_dt,
+            "valid_from_display": valid_from_display,
+            "valid_from": valid_from_dt,
+            "valid_to_display": valid_to_display,
+            "valid_to": valid_to_dt,
+            "forecast": forecast_periods,
+        })
+
+    return taf_reports
+
+
 def format_notam_card(notam):
     highlighted_text = highlight_keywords(notam["text"])
     category_color = CATEGORY_COLORS.get(notam["category"], "#ccc")
@@ -350,7 +510,7 @@ if uploaded_file:
         st.error(f"Error reading file: {e}")
 
 # ----- TABS -----
-tab1, tab2 = st.tabs(["CFPS/FAA Viewer", "FAA Debug"])
+tab1, tab2, tab3 = st.tabs(["CFPS/FAA Viewer", "FAA Debug", "METAR/TAF"])
 
 # ---------------- Tab 1: CFPS/FAA Viewer ----------------
 with tab1:
@@ -489,3 +649,91 @@ with tab2:
 
         except Exception as e:
             st.error(f"FAA fetch failed for {debug_icao}: {e}")
+
+
+# ---------------- Tab 3: METAR/TAF ----------------
+with tab3:
+    st.header("METAR & TAF Data")
+
+    if not icao_list:
+        st.info("Enter at least one ICAO code above to retrieve METAR/TAF data.")
+    else:
+        unique_codes = sorted(set(icao_list))
+        st.write(f"Fetching METAR/TAF data for {len(unique_codes)} station(s)...")
+
+        try:
+            metar_reports = get_metar_reports(tuple(unique_codes))
+        except Exception as e:
+            metar_reports = {}
+            st.warning(f"Failed to retrieve METAR data: {e}")
+
+        try:
+            taf_reports = get_taf_reports(tuple(unique_codes))
+        except Exception as e:
+            taf_reports = {}
+            st.warning(f"Failed to retrieve TAF data: {e}")
+
+        if not any(metar_reports.get(code) or taf_reports.get(code) for code in unique_codes):
+            st.info("No METAR/TAF data returned for the provided stations.")
+
+        for code in unique_codes:
+            metars = metar_reports.get(code, [])
+            tafs = taf_reports.get(code, [])
+
+            with st.expander(code, expanded=False):
+                if metars:
+                    st.subheader("Latest METAR")
+                    for metar in sorted(metars, key=lambda m: m.get("issue_time") or datetime.min, reverse=True):
+                        header_parts = ["**METAR**"]
+                        if metar.get("flight_category"):
+                            header_parts.append(f"Flight Category: `{metar['flight_category']}`")
+                        if metar.get("issue_time_display") and metar["issue_time_display"] != "N/A":
+                            header_parts.append(f"Issued {metar['issue_time_display']}")
+                        st.markdown(" · ".join(header_parts))
+                        st.code(metar.get("raw", ""), language="text")
+
+                        if metar.get("details"):
+                            detail_html = "<br>".join(
+                                f"<strong>{label}:</strong> {value}" for label, value in metar["details"]
+                            )
+                            st.markdown(detail_html, unsafe_allow_html=True)
+
+                        st.markdown("---")
+                else:
+                    st.write("No METAR data returned for this station.")
+
+                if tafs:
+                    st.subheader("Latest TAF")
+                    for taf in sorted(tafs, key=lambda t: t.get("issue_time") or datetime.min, reverse=True):
+                        header_parts = ["**TAF**"]
+                        if taf.get("issue_time_display") and taf["issue_time_display"] != "N/A":
+                            header_parts.append(f"Issued {taf['issue_time_display']}")
+                        validity_parts = []
+                        if taf.get("valid_from_display") and taf["valid_from_display"] != "N/A":
+                            validity_parts.append(taf["valid_from_display"])
+                        if taf.get("valid_to_display") and taf["valid_to_display"] != "N/A":
+                            validity_parts.append(taf["valid_to_display"])
+                        if validity_parts:
+                            header_parts.append("Valid " + " → ".join(validity_parts))
+
+                        st.markdown(" · ".join(header_parts))
+                        st.code(taf.get("raw", ""), language="text")
+
+                        forecast_rows = []
+                        for fc in taf.get("forecast", []):
+                            details_text = "; ".join(f"{label}: {value}" for label, value in fc.get("details", []))
+                            forecast_rows.append({
+                                "From": fc.get("from_display", "N/A"),
+                                "To": fc.get("to_display", "N/A"),
+                                "Details": details_text or "—",
+                            })
+
+                        if forecast_rows:
+                            st.table(pd.DataFrame(forecast_rows))
+
+                        st.markdown("---")
+                else:
+                    st.write("No TAF data returned for this station.")
+
+                if not metars and not tafs:
+                    st.info("No METAR or TAF information was available for this station.")
