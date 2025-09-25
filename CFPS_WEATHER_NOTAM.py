@@ -250,6 +250,44 @@ def get_faa_notams(icao: str):
     return notams
 
 
+def _normalize_aviationweather_features(data):
+    """Return an iterable of feature/property dictionaries from API responses."""
+    if isinstance(data, dict):
+        # GeoJSON style response
+        features = data.get("features")
+        if isinstance(features, list):
+            for feature in features:
+                if isinstance(feature, dict):
+                    props = feature.get("properties")
+                    if isinstance(props, dict):
+                        yield props
+                    else:
+                        yield feature
+            return
+
+        # Direct data payload (no GeoJSON wrapper)
+        direct_items = data.get("data")
+        if isinstance(direct_items, list):
+            for item in direct_items:
+                if isinstance(item, dict):
+                    yield item
+            return
+
+        if data:
+            # Fallback to returning the dict itself
+            yield data
+        return
+
+    if isinstance(data, list):
+        for item in data:
+            if isinstance(item, dict):
+                props = item.get("properties")
+                if isinstance(props, dict):
+                    yield props
+                else:
+                    yield item
+
+
 @st.cache_data(ttl=300)
 def get_metar_reports(icao_codes: tuple[str, ...]):
     if not icao_codes:
@@ -283,14 +321,26 @@ def get_metar_reports(icao_codes: tuple[str, ...]):
     data = response.json()
 
     reports = {}
-    for feature in data.get("features", []):
-        props = feature.get("properties", {})
-        station = (props.get("station") or "").upper()
-        issue_display, issue_dt = format_iso_timestamp(props.get("issueTime"))
-        raw_text = props.get("rawMETAR") or props.get("rawOb") or props.get("rawText") or ""
-        flight_category = props.get("flightCategory")
-        metar_data = props.get("data", {})
+    for props in _normalize_aviationweather_features(data):
+        station = (props.get("station") or props.get("stationId") or "").upper()
+        issue_display, issue_dt = format_iso_timestamp(
+            props.get("issueTime") or props.get("issue_time")
+        )
+        raw_text = (
+            props.get("rawMETAR")
+            or props.get("rawOb")
+            or props.get("rawText")
+            or props.get("raw_text")
+            or ""
+        )
+        flight_category = props.get("flightCategory") or props.get("flight_category")
+        metar_data = props.get("data") or props.get("metarData") or props
+        if not isinstance(metar_data, dict):
+            metar_data = {}
         details = build_detail_list(metar_data, METAR_DETAIL_FIELDS)
+
+        if not station:
+            continue
 
         reports.setdefault(station, []).append({
             "station": station,
@@ -335,32 +385,58 @@ def get_taf_reports(icao_codes: tuple[str, ...]):
 
     taf_reports = {}
 
-    for feature in data.get("features", []):
-        props = feature.get("properties", {})
-        station = (props.get("station") or "").upper()
-        issue_display, issue_dt = format_iso_timestamp(props.get("issueTime"))
-        valid_from_display, valid_from_dt = format_iso_timestamp(props.get("validTimeFrom"))
-        valid_to_display, valid_to_dt = format_iso_timestamp(props.get("validTimeTo"))
-        raw_text = props.get("rawTAF") or props.get("rawText") or props.get("raw") or ""
+    for props in _normalize_aviationweather_features(data):
+        station = (props.get("station") or props.get("stationId") or "").upper()
+        if not station:
+            continue
+
+        issue_display, issue_dt = format_iso_timestamp(
+            props.get("issueTime") or props.get("issue_time")
+        )
+        valid_from_display, valid_from_dt = format_iso_timestamp(
+            props.get("validTimeFrom") or props.get("valid_time_from")
+        )
+        valid_to_display, valid_to_dt = format_iso_timestamp(
+            props.get("validTimeTo") or props.get("valid_time_to")
+        )
+        raw_text = (
+            props.get("rawTAF")
+            or props.get("rawText")
+            or props.get("raw")
+            or props.get("raw_text")
+            or ""
+        )
+
+        forecast_source = props.get("forecast") or props.get("forecastList") or []
+        if not isinstance(forecast_source, list):
+            forecast_source = []
 
         forecast_periods = []
-        for fc in props.get("forecast", []):
-            fc_from_display, fc_from_dt = format_iso_timestamp(fc.get("fcstTimeFrom"))
-            fc_to_display, fc_to_dt = format_iso_timestamp(fc.get("fcstTimeTo"))
+        for fc in forecast_source:
+            if not isinstance(fc, dict):
+                continue
+            fc_from_display, fc_from_dt = format_iso_timestamp(
+                fc.get("fcstTimeFrom") or fc.get("timeFrom")
+            )
+            fc_to_display, fc_to_dt = format_iso_timestamp(
+                fc.get("fcstTimeTo") or fc.get("timeTo")
+            )
             fc_details = build_detail_list(fc, TAF_FORECAST_FIELDS)
 
-            wx = fc.get("wxString")
+            wx = fc.get("wxString") or fc.get("weather")
             if wx:
                 if isinstance(wx, list):
                     wx = ", ".join(str(v) for v in wx if v not in (None, ""))
                 fc_details.append(("Weather", wx))
 
-            clouds = fc.get("clouds")
-            if clouds:
+            clouds = fc.get("clouds") or fc.get("cloudList")
+            if isinstance(clouds, list):
                 cloud_parts = []
                 for cloud in clouds:
+                    if not isinstance(cloud, dict):
+                        continue
                     cover = cloud.get("cover")
-                    base = cloud.get("base")
+                    base = cloud.get("base") or cloud.get("base_feet")
                     if cover and base:
                         cloud_parts.append(f"{cover} {base}ft")
                     elif cover:
