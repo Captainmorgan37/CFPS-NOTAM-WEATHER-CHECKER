@@ -594,13 +594,66 @@ def build_metar_summary(report_entry: dict) -> list[str]:
     return summary_lines
 
 TAF_FORECAST_FIELDS = [
-    ("changeIndicator", "Change"),
-    ("probability", "Probability"),
-    ("windDir", "Wind Dir (°)"),
-    ("windSpeed", "Wind Speed (kt)"),
-    ("windGust", "Wind Gust (kt)"),
-    ("visibility", "Visibility"),
-    ("vertVisibility", "Vertical Vis (ft)"),
+    (("changeIndicator", "change_indicator"), "Change"),
+    (
+        (
+            "probability",
+            "probabilityPercent",
+            "probability_percent",
+            "probability_pct",
+        ),
+        "Probability",
+    ),
+    (
+        (
+            "windDir",
+            "windDirDegrees",
+            "wind_direction",
+            "wind_direction_degrees",
+        ),
+        "Wind Dir (°)",
+    ),
+    (
+        (
+            "windSpeed",
+            "windSpeedKt",
+            "windSpeedKT",
+            "wind_speed",
+            "wind_speed_kt",
+        ),
+        "Wind Speed (kt)",
+    ),
+    (
+        (
+            "windGust",
+            "windGustKt",
+            "windGustKT",
+            "wind_gust",
+            "wind_gust_kt",
+        ),
+        "Wind Gust (kt)",
+    ),
+    (
+        (
+            "visibility",
+            "visibilitySM",
+            "visibility_sm",
+            "visibility_statute",
+            "visibility_statute_mi",
+            "visibility_mi",
+        ),
+        "Visibility",
+    ),
+    (
+        (
+            "vertVisibility",
+            "vert_visibility",
+            "verticalVisibility",
+            "vertical_visibility",
+            "vertical_visibility_ft",
+        ),
+        "Vertical Vis (ft)",
+    ),
 ]
 
 TAF_CHANGE_REGEX = re.compile(r"^(FM\d{6}|TEMPO|BECMG|PROB\d{2}|RMK|AMD|COR)$")
@@ -1026,14 +1079,31 @@ def get_taf_reports(icao_codes: tuple[str, ...]):
                     wx = ", ".join(str(v) for v in wx if v not in (None, ""))
                 fc_details.append(("Weather", wx))
 
-            clouds = fc.get("clouds") or fc.get("cloudList") or fc.get("skyCondition")
+            clouds = (
+                fc.get("clouds")
+                or fc.get("cloudList")
+                or fc.get("skyCondition")
+                or fc.get("sky_condition")
+            )
             if isinstance(clouds, list):
                 cloud_parts = []
                 for cloud in clouds:
                     if not isinstance(cloud, dict):
                         continue
-                    cover = cloud.get("cover")
-                    base = cloud.get("base") or cloud.get("base_feet")
+                    cover = (
+                        cloud.get("cover")
+                        or cloud.get("cloudCover")
+                        or cloud.get("cloud_cover")
+                        or cloud.get("skyCover")
+                    )
+                    base = (
+                        cloud.get("base")
+                        or cloud.get("base_feet")
+                        or cloud.get("cloudBaseFT")
+                        or cloud.get("cloudBaseFt")
+                        or cloud.get("baseFeetAGL")
+                        or cloud.get("base_feet_agl")
+                    )
                     if cover and base:
                         cloud_parts.append(f"{cover} {base}ft")
                     elif cover:
