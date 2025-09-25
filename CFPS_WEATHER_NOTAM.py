@@ -301,6 +301,26 @@ def _parse_visibility_value(value) -> float | None:
     if isinstance(value, (int, float)):
         return float(value)
 
+    if isinstance(value, dict):
+        for key in ("value", "visibility", "minValue", "maxValue"):
+            if key in value:
+                nested_val = _parse_visibility_value(value[key])
+                if nested_val is not None:
+                    return nested_val
+        for key in ("repr", "text", "raw", "string"):
+            if key in value:
+                nested_val = _parse_visibility_value(value[key])
+                if nested_val is not None:
+                    return nested_val
+        return None
+
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            nested_val = _parse_visibility_value(item)
+            if nested_val is not None:
+                return nested_val
+        return None
+
     text = str(value).strip().upper()
     if not text:
         return None
