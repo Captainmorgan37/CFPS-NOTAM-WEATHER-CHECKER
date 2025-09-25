@@ -388,6 +388,17 @@ def _parse_visibility_value(value) -> float | None:
 
 
 def _should_highlight_visibility(value) -> bool:
+    if value in (None, ""):
+        return False
+
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return False
+        upper_value = stripped.upper()
+        if "/" in upper_value and "SM" not in upper_value:
+            return False
+
     vis_value = _parse_visibility_value(value)
     if vis_value is None:
         return False
@@ -1171,7 +1182,11 @@ def format_taf_for_display_html(raw_taf: str) -> str:
     lines = _split_taf_into_lines(raw_taf)
     if not lines:
         escaped = html.escape(raw_taf or "")
-        return f"<pre style='font-family:monospace;white-space:pre-wrap;'>{escaped}</pre>"
+        return (
+            "<div style='font-family:monospace;white-space:pre-wrap;'>"
+            f"{escaped}"
+            "</div>"
+        )
 
     html_lines: list[str] = []
     for line in lines:
@@ -1190,11 +1205,11 @@ def format_taf_for_display_html(raw_taf: str) -> str:
                 tokens_html.append(escaped_token)
         html_lines.append(" ".join(tokens_html))
 
-    joined = "\n".join(html_lines)
+    joined = "<br>".join(html_lines)
     return (
-        "<pre style='font-family:monospace;white-space:pre-wrap;'>"
+        "<div style='font-family:monospace;white-space:pre-wrap;'>"
         f"{joined}"
-        "</pre>"
+        "</div>"
     )
 
 
