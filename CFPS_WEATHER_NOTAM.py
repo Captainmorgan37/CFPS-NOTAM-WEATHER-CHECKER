@@ -73,14 +73,37 @@ def format_iso_timestamp(value):
         return value_str, None
 
 
+def _first_non_empty(data_dict: dict, *keys):
+    for key in keys:
+        if not key:
+            continue
+        if key in data_dict:
+            value = data_dict.get(key)
+            if value not in (None, "", []):
+                return value
+    return None
+
+
 def build_detail_list(data_dict, field_map):
+    if not isinstance(data_dict, dict):
+        return []
     details = []
-    for key, label in field_map:
-        if key not in data_dict:
-            continue
-        value = data_dict.get(key)
-        if value in (None, "", []):
-            continue
+    for key_spec, label in field_map:
+        if isinstance(key_spec, (tuple, list)):
+            value = None
+            for key in key_spec:
+                value = data_dict.get(key)
+                if value not in (None, "", []):
+                    break
+            else:
+                continue
+        else:
+            if key_spec not in data_dict:
+                continue
+            value = data_dict.get(key_spec)
+            if value in (None, "", []):
+                continue
+
         if isinstance(value, list):
             value = ", ".join(str(v) for v in value if v not in (None, ""))
         elif isinstance(value, dict):
@@ -90,15 +113,227 @@ def build_detail_list(data_dict, field_map):
 
 
 METAR_DETAIL_FIELDS = [
-    ("temp", "Temperature (°C)"),
-    ("dewpoint", "Dewpoint (°C)"),
-    ("windDir", "Wind Dir (°)"),
-    ("windSpeed", "Wind Speed (kt)"),
-    ("windGust", "Wind Gust (kt)"),
-    ("visibility", "Visibility"),
-    ("altimeter", "Altimeter"),
-    ("ceiling", "Ceiling (ft)"),
+    (("temp", "temperature", "temperature_c"), "Temperature (°C)"),
+    (("dewpoint", "dew_point", "dewpoint_c"), "Dewpoint (°C)"),
+    (("windDir", "wind_direction", "wind_direction_degrees"), "Wind Dir (°)"),
+    (("windSpeed", "wind_speed", "wind_speed_kt"), "Wind Speed (kt)"),
+    (("windGust", "wind_gust", "wind_gust_kt"), "Wind Gust (kt)"),
+    (("visibility", "visibility_statute", "visibility_sm", "visibility_mi"), "Visibility"),
+    (("altimeter", "altimeter_in_hg", "altim_in_hg"), "Altimeter (inHg)"),
+    (("ceiling", "ceiling_ft_agl"), "Ceiling (ft)"),
+    (("wxString", "weather", "wx", "wx_string"), "Weather"),
 ]
+
+METAR_SUMMARY_LABELS = {
+    "Temperature (°C)",
+    "Dewpoint (°C)",
+    "Wind Dir (°)",
+    "Wind Speed (kt)",
+    "Wind Gust (kt)",
+    "Visibility",
+    "Altimeter (inHg)",
+    "Ceiling (ft)",
+    "Weather",
+}
+
+
+def _format_numeric(value, decimals: int | None = None) -> str | None:
+    if value in (None, "", [], "M"):
+        return None
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        text = str(value).strip()
+        return text or None
+
+    if decimals is None:
+        if abs(num - round(num)) < 1e-6:
+            return str(int(round(num)))
+        return f"{num:.1f}"
+    return f"{num:.{decimals}f}"
+
+
+def _format_wind_direction(value) -> str | None:
+    if value in (None, "", [], "M"):
+        return None
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        text = str(value).strip()
+        return text or None
+    return f"{int(round(num))}°"
+
+
+def _format_cloud_layers(metar_data: dict) -> str | None:
+    layer_sources = (
+        "cloudLayers",
+        "clouds",
+        "cloudList",
+        "skyCondition",
+    )
+    for key in layer_sources:
+        layers = metar_data.get(key)
+        if not isinstance(layers, list):
+            continue
+        layer_parts = []
+        for layer in layers:
+            if not isinstance(layer, dict):
+                continue
+            cover = _first_non_empty(layer, "cover", "coverage", "amount")
+            base_val = _first_non_empty(
+                layer,
+                "base",
+                "base_feet",
+                "baseFeet",
+                "base_feet_agl",
+                "base_agl",
+                "baseHeightFt",
+                "baseHeight",
+                "base_ft_agl",
+                "height",
+                "altitude",
+            )
+            if isinstance(base_val, dict):
+                base_val = _first_non_empty(base_val, "ft", "feet", "value")
+            base_text = _format_numeric(base_val)
+            if cover and base_text:
+                layer_parts.append(f"{cover} {base_text} ft")
+            elif cover:
+                layer_parts.append(str(cover))
+            elif base_text:
+                layer_parts.append(f"{base_text} ft")
+        if layer_parts:
+            return ", ".join(layer_parts)
+    return None
+
+
+def _format_weather(metar_data: dict) -> str | None:
+    weather = _first_non_empty(
+        metar_data,
+        "wxString",
+        "weather",
+        "wx",
+        "wx_string",
+    )
+    if weather is None:
+        weather = metar_data.get("presentWeather")
+    if isinstance(weather, list):
+        parts = []
+        for item in weather:
+            if isinstance(item, dict):
+                descriptor = " ".join(
+                    str(item.get(key)).strip()
+                    for key in ("intensity", "descriptor", "phenomena", "value")
+                    if item.get(key)
+                ).strip()
+                if descriptor:
+                    parts.append(descriptor)
+            elif item not in (None, ""):
+                parts.append(str(item))
+        weather = ", ".join(parts)
+    if isinstance(weather, str):
+        weather = weather.strip()
+    return weather or None
+
+
+def build_metar_summary(report_entry: dict) -> list[str]:
+    metar_data = report_entry.get("metar_data") or {}
+    if not isinstance(metar_data, dict):
+        metar_data = {}
+
+    summary_lines: list[str] = []
+
+    issue_display = report_entry.get("issue_time_display")
+    if issue_display and issue_display != "N/A":
+        summary_lines.append(f"Issued {issue_display}")
+
+    wind_speed = _format_numeric(
+        _first_non_empty(metar_data, "windSpeed", "wind_speed", "wind_speed_kt")
+    )
+    if wind_speed:
+        wind_dir_value = _first_non_empty(
+            metar_data, "windDir", "wind_direction", "wind_direction_degrees"
+        )
+        wind_dir = _format_wind_direction(wind_dir_value)
+        gust = _format_numeric(
+            _first_non_empty(metar_data, "windGust", "wind_gust", "wind_gust_kt")
+        )
+        if wind_dir:
+            wind_line = f"Wind {wind_dir} at {wind_speed} kt"
+        else:
+            wind_line = f"Wind {wind_speed} kt"
+        if gust:
+            wind_line += f" (gusting {gust} kt)"
+        summary_lines.append(wind_line)
+    else:
+        wind_char = _first_non_empty(
+            metar_data, "windDir", "wind_direction", "wind_direction_degrees"
+        )
+        if isinstance(wind_char, str) and wind_char.strip().upper() == "CALM":
+            summary_lines.append("Wind calm")
+        else:
+            wind_dir = _format_wind_direction(wind_char)
+            if wind_dir:
+                summary_lines.append(f"Wind {wind_dir}")
+
+    temp = _format_numeric(
+        _first_non_empty(metar_data, "temp", "temperature", "temperature_c")
+    )
+    dewpoint = _format_numeric(
+        _first_non_empty(metar_data, "dewpoint", "dew_point", "dewpoint_c")
+    )
+    if temp or dewpoint:
+        temp_parts = []
+        if temp:
+            temp_parts.append(f"Temp {temp}°C")
+        if dewpoint:
+            temp_parts.append(f"Dew point {dewpoint}°C")
+        summary_lines.append(" / ".join(temp_parts))
+
+    visibility = _first_non_empty(
+        metar_data,
+        "visibility",
+        "visibility_statute",
+        "visibility_sm",
+        "visibility_mi",
+    )
+    vis_text = _format_numeric(visibility)
+    if visibility and not vis_text:
+        vis_text = str(visibility).strip()
+    if vis_text:
+        vis_line = None
+        try:
+            vis_numeric = float(str(visibility).strip("+"))
+        except (TypeError, ValueError):
+            vis_numeric = None
+        if vis_numeric is not None:
+            vis_line = f"Visibility {vis_text} sm"
+        else:
+            vis_line = f"Visibility {vis_text}"
+        summary_lines.append(vis_line)
+
+    altimeter = _format_numeric(
+        _first_non_empty(metar_data, "altimeter", "altimeter_in_hg", "altim_in_hg"),
+        decimals=2,
+    )
+    if altimeter:
+        summary_lines.append(f"Altimeter {altimeter} inHg")
+
+    ceiling = _format_numeric(
+        _first_non_empty(metar_data, "ceiling", "ceiling_ft_agl")
+    )
+    if ceiling:
+        summary_lines.append(f"Ceiling {ceiling} ft")
+
+    weather = _format_weather(metar_data)
+    if weather:
+        summary_lines.append(f"Weather {weather}")
+
+    clouds = _format_cloud_layers(metar_data)
+    if clouds:
+        summary_lines.append(f"Clouds {clouds}")
+
+    return summary_lines
 
 TAF_FORECAST_FIELDS = [
     ("changeIndicator", "Change"),
@@ -410,6 +645,7 @@ def get_metar_reports(icao_codes: tuple[str, ...]):
             "issue_time": issue_dt,
             "flight_category": flight_category,
             "details": details,
+            "metar_data": metar_data,
         }
 
         existing_entries = reports.get(station, [])
@@ -934,10 +1170,19 @@ with tab3:
                     st.markdown(" · ".join(header_parts))
                     st.code(latest_metar.get("raw", ""), language="text")
 
-                    if latest_metar.get("details"):
+                    summary_lines = build_metar_summary(latest_metar)
+                    if summary_lines:
+                        st.markdown("\n".join(f"- {line}" for line in summary_lines))
+
+                    remaining_details = [
+                        (label, value)
+                        for label, value in latest_metar.get("details", [])
+                        if label not in METAR_SUMMARY_LABELS
+                    ]
+                    if remaining_details:
                         detail_html = "<br>".join(
                             f"<strong>{label}:</strong> {value}"
-                            for label, value in latest_metar["details"]
+                            for label, value in remaining_details
                         )
                         st.markdown(detail_html, unsafe_allow_html=True)
 
