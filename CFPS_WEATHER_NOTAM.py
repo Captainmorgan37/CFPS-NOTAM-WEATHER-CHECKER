@@ -258,7 +258,7 @@ def get_metar_reports(icao_codes: tuple[str, ...]):
     url = "https://aviationweather.gov/api/data/metar"
     params = {
         "ids": ",".join(sorted(set(code.upper() for code in icao_codes))),
-        "format": "JSON",
+        "format": "json",
         "mostRecent": "true",
         "mostRecentForEachStation": "true",
         "hours": 3,
@@ -272,7 +272,7 @@ def get_metar_reports(icao_codes: tuple[str, ...]):
         if status_code == 400:
             fallback_params = {
                 "ids": params["ids"],
-                "format": "JSON",
+                "format": "json",
                 "hours": 3,
             }
             response = requests.get(url, params=fallback_params, timeout=10)
@@ -312,7 +312,7 @@ def get_taf_reports(icao_codes: tuple[str, ...]):
     url = "https://aviationweather.gov/api/data/taf"
     params = {
         "ids": ",".join(sorted(set(code.upper() for code in icao_codes))),
-        "format": "JSON",
+        "format": "json",
         "mostRecent": "true",
     }
 
@@ -324,7 +324,7 @@ def get_taf_reports(icao_codes: tuple[str, ...]):
         if status_code == 400:
             fallback_params = {
                 "ids": params["ids"],
-                "format": "JSON",
+                "format": "json",
             }
             response = requests.get(url, params=fallback_params, timeout=10)
             response.raise_for_status()
