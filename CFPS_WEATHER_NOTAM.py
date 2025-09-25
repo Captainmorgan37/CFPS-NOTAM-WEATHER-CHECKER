@@ -110,6 +110,8 @@ TAF_FORECAST_FIELDS = [
     ("vertVisibility", "Vertical Vis (ft)"),
 ]
 
+TAF_CHANGE_REGEX = re.compile(r"^(FM\d{6}|TEMPO|BECMG|PROB\d{2}|RMK|AMD|COR)$")
+
 def highlight_keywords(notam_text: str):
     for kw in KEYWORDS:
         notam_text = notam_text.replace(
@@ -401,14 +403,24 @@ def get_metar_reports(icao_codes: tuple[str, ...]):
         if not station:
             continue
 
-        reports.setdefault(station, []).append({
+        report_entry = {
             "station": station,
             "raw": raw_text,
             "issue_time_display": issue_display,
             "issue_time": issue_dt,
             "flight_category": flight_category,
             "details": details,
-        })
+        }
+
+        existing_entries = reports.get(station, [])
+        if not existing_entries:
+            reports[station] = [report_entry]
+        else:
+            existing = existing_entries[0]
+            existing_dt = existing.get("issue_time") or datetime.min
+            new_dt = report_entry.get("issue_time") or datetime.min
+            if new_dt >= existing_dt:
+                reports[station] = [report_entry]
 
     return reports
 
@@ -556,6 +568,31 @@ def get_taf_reports(icao_codes: tuple[str, ...]):
         })
 
     return taf_reports
+
+
+def format_taf_for_display(raw_taf: str) -> str:
+    if not raw_taf:
+        return ""
+
+    tokens = raw_taf.split()
+    if not tokens:
+        return raw_taf
+
+    lines = []
+    current_line = []
+
+    for token in tokens:
+        if current_line and TAF_CHANGE_REGEX.match(token):
+            first_token = current_line[0]
+            if not (re.match(r"^PROB\d{2}$", first_token) and token == "TEMPO"):
+                lines.append(" ".join(current_line))
+                current_line = []
+        current_line.append(token)
+
+    if current_line:
+        lines.append(" ".join(current_line))
+
+    return "\n".join(lines)
 
 
 def format_notam_card(notam):
@@ -877,22 +914,34 @@ with tab3:
             with st.expander(code, expanded=False):
                 if metars:
                     st.subheader("Latest METAR")
-                    for metar in sorted(metars, key=lambda m: m.get("issue_time") or datetime.min, reverse=True):
-                        header_parts = ["**METAR**"]
-                        if metar.get("flight_category"):
-                            header_parts.append(f"Flight Category: `{metar['flight_category']}`")
-                        if metar.get("issue_time_display") and metar["issue_time_display"] != "N/A":
-                            header_parts.append(f"Issued {metar['issue_time_display']}")
-                        st.markdown(" · ".join(header_parts))
-                        st.code(metar.get("raw", ""), language="text")
+                    latest_metar = max(
+                        metars,
+                        key=lambda m: m.get("issue_time") or datetime.min,
+                    )
 
-                        if metar.get("details"):
-                            detail_html = "<br>".join(
-                                f"<strong>{label}:</strong> {value}" for label, value in metar["details"]
-                            )
-                            st.markdown(detail_html, unsafe_allow_html=True)
+                    header_parts = ["**METAR**"]
+                    if latest_metar.get("flight_category"):
+                        header_parts.append(
+                            f"Flight Category: `{latest_metar['flight_category']}`"
+                        )
+                    if (
+                        latest_metar.get("issue_time_display")
+                        and latest_metar["issue_time_display"] != "N/A"
+                    ):
+                        header_parts.append(
+                            f"Issued {latest_metar['issue_time_display']}"
+                        )
+                    st.markdown(" · ".join(header_parts))
+                    st.code(latest_metar.get("raw", ""), language="text")
 
-                        st.markdown("---")
+                    if latest_metar.get("details"):
+                        detail_html = "<br>".join(
+                            f"<strong>{label}:</strong> {value}"
+                            for label, value in latest_metar["details"]
+                        )
+                        st.markdown(detail_html, unsafe_allow_html=True)
+
+                    st.markdown("---")
                 else:
                     st.write("No METAR data returned for this station.")
 
@@ -911,7 +960,8 @@ with tab3:
                             header_parts.append("Valid " + " → ".join(validity_parts))
 
                         st.markdown(" · ".join(header_parts))
-                        st.code(taf.get("raw", ""), language="text")
+                        formatted_taf = format_taf_for_display(taf.get("raw", ""))
+                        st.code(formatted_taf, language="text")
 
                         forecast_rows = []
                         for fc in taf.get("forecast", []):
