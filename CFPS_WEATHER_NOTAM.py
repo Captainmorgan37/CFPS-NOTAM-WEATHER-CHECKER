@@ -33,13 +33,44 @@ runways_df = load_runway_data()
 
 # ----- FUNCTIONS -----
 def format_iso_timestamp(value):
-    if not value:
+    if value in (None, "", []):
         return "N/A", None
+
+    def _format_dt(dt_obj):
+        dt_naive = dt_obj.replace(tzinfo=None)
+        return dt_naive.strftime("%b %d %Y, %H:%MZ"), dt_naive
+
+    # Handle numeric timestamps (seconds or milliseconds since epoch)
+    if isinstance(value, (int, float)):
+        try:
+            seconds = float(value)
+            if seconds > 1e12:  # Likely milliseconds
+                seconds /= 1000.0
+            dt = datetime.utcfromtimestamp(seconds)
+            return _format_dt(dt)
+        except (OverflowError, ValueError):
+            return str(value), None
+
+    value_str = str(value).strip()
+    if not value_str:
+        return "N/A", None
+
+    # Handle purely numeric strings (e.g., epoch seconds/milliseconds)
+    if value_str.isdigit():
+        try:
+            seconds = int(value_str)
+            if len(value_str) > 10:
+                seconds /= 1000.0
+            dt = datetime.utcfromtimestamp(seconds)
+            return _format_dt(dt)
+        except (OverflowError, ValueError):
+            pass
+
     try:
-        dt = datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
-        return dt.strftime("%b %d %Y, %H:%MZ"), dt
+        dt = datetime.fromisoformat(value_str.replace("Z", "+00:00"))
+        return _format_dt(dt)
     except ValueError:
-        return value, None
+        return value_str, None
 
 
 def build_detail_list(data_dict, field_map):
