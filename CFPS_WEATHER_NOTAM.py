@@ -3,6 +3,7 @@ import pandas as pd
 import requests
 import json
 import re
+import html
 from datetime import datetime, timedelta
 
 # ----- CONFIG -----
@@ -1134,29 +1135,67 @@ def get_taf_reports(icao_codes: tuple[str, ...]):
     return taf_reports
 
 
-def format_taf_for_display(raw_taf: str) -> str:
+def _split_taf_into_lines(raw_taf: str) -> list[list[str]]:
     if not raw_taf:
-        return ""
+        return []
 
     tokens = raw_taf.split()
     if not tokens:
-        return raw_taf
+        return []
 
-    lines = []
-    current_line = []
+    lines: list[list[str]] = []
+    current_line: list[str] = []
 
     for token in tokens:
         if current_line and TAF_CHANGE_REGEX.match(token):
             first_token = current_line[0]
             if not (re.match(r"^PROB\d{2}$", first_token) and token == "TEMPO"):
-                lines.append(" ".join(current_line))
+                lines.append(current_line)
                 current_line = []
         current_line.append(token)
 
     if current_line:
-        lines.append(" ".join(current_line))
+        lines.append(current_line)
 
-    return "\n".join(lines)
+    return lines
+
+
+def format_taf_for_display(raw_taf: str) -> str:
+    lines = _split_taf_into_lines(raw_taf)
+    if not lines:
+        return raw_taf or ""
+    return "\n".join(" ".join(line) for line in lines)
+
+
+def format_taf_for_display_html(raw_taf: str) -> str:
+    lines = _split_taf_into_lines(raw_taf)
+    if not lines:
+        escaped = html.escape(raw_taf or "")
+        return f"<pre style='font-family:monospace;white-space:pre-wrap;'>{escaped}</pre>"
+
+    html_lines: list[str] = []
+    for line in lines:
+        tokens_html = []
+        for token in line:
+            token_str = token or ""
+            highlight = False
+            if _should_highlight_visibility(token_str):
+                highlight = True
+            if _should_highlight_weather(token_str):
+                highlight = True
+            escaped_token = html.escape(token_str)
+            if highlight:
+                tokens_html.append(_wrap_highlight(escaped_token))
+            else:
+                tokens_html.append(escaped_token)
+        html_lines.append(" ".join(tokens_html))
+
+    joined = "\n".join(html_lines)
+    return (
+        "<pre style='font-family:monospace;white-space:pre-wrap;'>"
+        f"{joined}"
+        "</pre>"
+    )
 
 
 def format_notam_card(notam):
@@ -1536,8 +1575,9 @@ with tab3:
                             header_parts.append("Valid " + " → ".join(validity_parts))
 
                         st.markdown(" · ".join(header_parts))
-                        formatted_taf = format_taf_for_display(taf.get("raw", ""))
-                        st.code(formatted_taf, language="text")
+                        raw_taf = taf.get("raw", "")
+                        formatted_taf_html = format_taf_for_display_html(raw_taf)
+                        st.markdown(formatted_taf_html, unsafe_allow_html=True)
 
                         forecast_rows = []
                         for fc in taf.get("forecast", []):
