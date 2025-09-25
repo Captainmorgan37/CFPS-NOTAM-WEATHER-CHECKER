@@ -288,6 +288,93 @@ def _parse_visibility_from_match(match: re.Match) -> float | str | None:
     return value_text
 
 
+def _try_float(value: str) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_visibility_value(value) -> float | None:
+    if value in (None, "", [], "M"):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+
+    text = str(value).strip().upper()
+    if not text:
+        return None
+
+    if text.startswith("P") or text.startswith("M"):
+        text = text[1:]
+
+    if text.endswith("SM"):
+        text = text[:-2]
+    text = text.replace("SM", "")
+    text = text.strip().strip("+")
+    if not text:
+        return None
+
+    parts = text.split()
+    if len(parts) == 2:
+        whole_val = _try_float(parts[0]) or 0.0
+        frac_val = _parse_fraction(parts[1])
+        if frac_val is None:
+            return _try_float(text)
+        return whole_val + frac_val
+
+    if "/" in text:
+        frac_val = _parse_fraction(text)
+        if frac_val is not None:
+            return frac_val
+
+    return _try_float(text)
+
+
+def _should_highlight_visibility(value) -> bool:
+    vis_value = _parse_visibility_value(value)
+    if vis_value is None:
+        return False
+    return vis_value <= 2.0
+
+
+def _should_highlight_weather(value) -> bool:
+    if value in (None, ""):
+        return False
+    if not isinstance(value, str):
+        value = str(value)
+    return "TS" in value.upper()
+
+
+def _wrap_highlight(text: str) -> str:
+    return f"<span style='color:#c41230;font-weight:bold'>{text}</span>"
+
+
+def _format_detail_entry(label: str, value) -> str:
+    value_text = "—" if value in (None, "") else str(value)
+    label_lower = label.lower()
+    highlight = False
+    if "visibility" in label_lower and _should_highlight_visibility(value):
+        highlight = True
+    if "weather" in label_lower and _should_highlight_weather(value_text):
+        highlight = True
+    if highlight:
+        value_text = _wrap_highlight(value_text)
+    return f"<strong>{label}:</strong> {value_text}"
+
+
+def _format_inline_detail(label: str, value) -> str:
+    value_text = "—" if value in (None, "") else str(value)
+    label_lower = label.lower()
+    highlight = False
+    if "visibility" in label_lower and _should_highlight_visibility(value):
+        highlight = True
+    if "weather" in label_lower and _should_highlight_weather(value_text):
+        highlight = True
+    text = f"{label}: {value_text}"
+    return _wrap_highlight(text) if highlight else text
+
+
 def _parse_signed_temperature(value: str) -> int | None:
     if not value:
         return None
@@ -421,6 +508,8 @@ def build_metar_summary(report_entry: dict) -> list[str]:
             vis_line = f"Visibility {vis_text} sm"
         else:
             vis_line = f"Visibility {vis_text}"
+        if _should_highlight_visibility(visibility):
+            vis_line = _wrap_highlight(vis_line)
         summary_lines.append(vis_line)
 
     altimeter = _format_numeric(
@@ -438,7 +527,10 @@ def build_metar_summary(report_entry: dict) -> list[str]:
 
     weather = _format_weather(metar_data)
     if weather:
-        summary_lines.append(f"Weather {weather}")
+        weather_line = f"Weather {weather}"
+        if _should_highlight_weather(weather):
+            weather_line = _wrap_highlight(weather_line)
+        summary_lines.append(weather_line)
 
     clouds = _format_cloud_layers(metar_data)
     if clouds:
@@ -1283,7 +1375,10 @@ with tab3:
 
                     summary_lines = build_metar_summary(latest_metar)
                     if summary_lines:
-                        st.markdown("\n".join(f"- {line}" for line in summary_lines))
+                        st.markdown(
+                            "\n".join(f"- {line}" for line in summary_lines),
+                            unsafe_allow_html=True,
+                        )
 
                     remaining_details = [
                         (label, value)
@@ -1292,7 +1387,7 @@ with tab3:
                     ]
                     if remaining_details:
                         detail_html = "<br>".join(
-                            f"<strong>{label}:</strong> {value}"
+                            _format_detail_entry(label, value)
                             for label, value in remaining_details
                         )
                         st.markdown(detail_html, unsafe_allow_html=True)
@@ -1321,15 +1416,23 @@ with tab3:
 
                         forecast_rows = []
                         for fc in taf.get("forecast", []):
-                            details_text = "; ".join(f"{label}: {value}" for label, value in fc.get("details", []))
+                            detail_entries = [
+                                _format_inline_detail(label, value)
+                                for label, value in fc.get("details", [])
+                            ]
+                            details_text = "; ".join(detail_entries) if detail_entries else "—"
                             forecast_rows.append({
                                 "From": fc.get("from_display", "N/A"),
                                 "To": fc.get("to_display", "N/A"),
-                                "Details": details_text or "—",
+                                "Details": details_text,
                             })
 
                         if forecast_rows:
-                            st.table(pd.DataFrame(forecast_rows))
+                            forecast_df = pd.DataFrame(forecast_rows)
+                            st.markdown(
+                                forecast_df.to_html(escape=False, index=False),
+                                unsafe_allow_html=True,
+                            )
 
                         st.markdown("---")
                 else:
