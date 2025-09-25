@@ -264,8 +264,22 @@ def get_metar_reports(icao_codes: tuple[str, ...]):
         "hours": 3,
     }
 
-    response = requests.get(url, params=params, timeout=10)
-    response.raise_for_status()
+    try:
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        status_code = getattr(exc.response, "status_code", None)
+        if status_code == 400:
+            fallback_params = {
+                "ids": params["ids"],
+                "format": "JSON",
+                "hours": 3,
+            }
+            response = requests.get(url, params=fallback_params, timeout=10)
+            response.raise_for_status()
+        else:
+            raise
+
     data = response.json()
 
     reports = {}
@@ -302,8 +316,21 @@ def get_taf_reports(icao_codes: tuple[str, ...]):
         "mostRecent": "true",
     }
 
-    response = requests.get(url, params=params, timeout=10)
-    response.raise_for_status()
+    try:
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        status_code = getattr(exc.response, "status_code", None)
+        if status_code == 400:
+            fallback_params = {
+                "ids": params["ids"],
+                "format": "JSON",
+            }
+            response = requests.get(url, params=fallback_params, timeout=10)
+            response.raise_for_status()
+        else:
+            raise
+
     data = response.json()
 
     taf_reports = {}
